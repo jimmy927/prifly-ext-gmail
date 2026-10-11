@@ -41,8 +41,9 @@ says to connect one.
 ## The launcher: From a Gmail thread…
 
 In prifly's New session area it lists your mail as a board, one column per
-Gmail search, one card per thread (subject, who wrote and when, the message and
-attachment counts, a link to the thread in Gmail). Typing in the filter field
+Gmail search, one card per thread (subject, who wrote and when, the message
+count, a paperclip when a message has an attachment, a link to the thread in
+Gmail). Typing in the filter field
 searches Gmail with what you typed, in one column called Results. Opening a
 card shows the whole thread; starting from it starts a session that already
 knows it.
@@ -51,7 +52,12 @@ knows it.
   for example `Unread=is:unread in:inbox; Jobs=from:jobylon`. Spaces and empty
   parts are fine; what parses to nothing gives the default three (Unread,
   Inbox, Starred). Each column shows up to 25 threads, and a thread appears
-  only in the first column that has it.
+  only in the first column that has it. A board read is kept for `pollSeconds`
+  (or until new mail arrives), so reopening it costs no Gmail request; a typed
+  filter always reads Gmail, but the same one asked again within 2 s reuses its
+  answer. Gmail's metadata answers carry no attachment parts, so the paperclip
+  (no count) comes from one more search per column, `<column search>
+  has:attachment`; the exact count is in the opened card.
 - Accounts: the board shows the account last picked here, else the `account`
   setting, else the first connected one. With two or more connected,
   "Switch account…" at the end of the board moves to the next and lists again.
@@ -73,12 +79,34 @@ knows it.
   the extension's folder (also git-ignored), so they survive a restart; the
   same file remembers the account picked with "Switch account…".
 
+## The poller
+
+Every `pollSeconds` (and a few seconds after start), for the account the board
+shows, the extension asks Gmail's history what arrived. It uses a few requests
+a tick and no per-thread metadata calls.
+
+- Unread flag: the launcher button shows "3 unread" (the number of threads the
+  first column's search finds, up to 100) and nothing at 0. When Google has
+  ended the grant the button shows the amber "Sign in again" instead, and the
+  poller keeps probing each tick until the grant works again (a board that
+  reads fine clears it too).
+- Reply chip: when a message arrives in a thread a session was started from,
+  that session's Gmail chip becomes "Gmail: new reply from <name>", amber, with
+  the line "<n> new since the session started". The count is kept in
+  `state.json`, so it survives a restart, and starting another session from
+  the thread resets it. Your own drafts and sent mail do not count. There is no
+  notification and nothing is typed into the session.
+- Any new mail marks the board's cache stale, so the next time it is opened it
+  reads Gmail. When Gmail has forgotten the poller's place (a 404 from
+  history) it starts again from the profile. An HTTP error is logged and the
+  next tick tries again.
+
 ## Settings
 
 - `columns`: `Name=Gmail search` pairs separated by `;`, the launcher's
   columns (default `Unread=is:unread in:inbox; Inbox=in:inbox; Starred=is:starred`).
-- `pollSeconds`: how often to check for new mail, 30 to 900 (default 90; for a poller to
-  come).
+- `pollSeconds`: how often to check for new mail, 30 to 900 (default 90). It is
+  also how long an opened board is served without asking Gmail again.
 - `account`: the email of the account to use; empty means the first one.
 
 ## Checks
@@ -90,11 +118,13 @@ file, 120 per function, cognitive complexity 15, no `any`, no `!`).
 |---|---|
 | `prifly-extension.json` | The manifest: the Google connection, its settings and `prompt.md` |
 | `index.ts` | `activate(api)` registers the four tools and puts the chips back; exports the launcher's `choices`, `open`, `launch` and `launched` |
-| `board.ts` | The board: the `columns` setting, the cards, "Switch account…" |
+| `board.ts` | The board: the `columns` setting, the cards, the board cache and the attachment search, "Switch account…" |
+| `poll.ts` | The poller: history, reply chips, the unread flag |
+| `runtime.ts` | What the board and poller share while running: the cache, the history ids, the flag |
 | `sign-in.ts` | The one-row boards for no account or an ended grant, and the sign-in launches |
 | `launcher.ts` | Open a thread, launch a session from it, the chip it wears |
 | `thread-prompt.ts` | The first prompt, the pictures carried in it, the session's name |
-| `state.ts` | `state.json`: the account picked, and thread → sessions |
+| `state.ts` | `state.json`: the account picked, and thread → sessions and new-reply count |
 | `tools.ts` | The tools |
 | `connection.ts` | Picks the connection; the texts for no connection, a ended grant and an HTTP error |
 | `gmail.ts`, `gmail-types.ts` | The REST client over `api.connections.fetch`, and tolerant parsers of its answers |

@@ -35,7 +35,7 @@
     {
       "id": "pollSeconds",
       "label": "Check for new mail every (seconds)",
-      "description": "For a poller to come: nothing checks for new mail yet.",
+      "description": "How often to check for new mail (the unread count on the launcher button and a new reply on a session's Gmail chip). An opened board is also kept this long before Gmail is asked again.",
       "type": "number",
       "default": 90,
       "min": 30,

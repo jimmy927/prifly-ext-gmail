@@ -116,27 +116,56 @@ export type FakeGmail = {
   throttle: { status: number; retryAfter: string; times: number };
   /** How many requests the fake got, throttled ones included. */
   hits: () => number;
+  /** A message arrives in a thread (a new thread when `threadId` is unknown); history records it. */
+  deliver: (threadId: string, delivery: Delivery) => string;
+  /** Gmail forgets its history up to now: an older `startHistoryId` gets a 404. */
+  expireHistory: () => void;
 };
 
-/** Like Gmail's `format=metadata`: the wanted headers, and the MIME parts without their data. */
-function metadataPart(part: Json, wanted: string[]): Json {
-  const { body, parts, headers, ...rest } = part as {
-    body?: Json;
-    parts?: Json[];
-    headers?: { name: string }[];
-  };
-  const kept = (headers ?? []).filter((each) => wanted.includes(each.name));
-  const { data: _data, ...bodyRest } = body ?? {};
+/** A message that came in after the fake started: what `deliver` writes. */
+export type Delivery = { from: string; text: string; labels?: string[]; subject?: string };
+
+/**
+ * Like Gmail's `format=metadata`: the id, labels and the wanted headers, and never `payload.parts`
+ * or any body data (https://developers.google.com/workspace/gmail/api/reference/rest/v1/Format).
+ */
+function metadataOnly(message: Json, wanted: string[]): Json {
+  const payload = message["payload"] as { headers?: { name: string }[]; body?: Json } & Json;
+  const { parts: _parts, body, headers, ...rest } = payload;
+  const { data: _data, attachmentId: _attachment, ...size } = (body ?? {}) as Json;
   return {
-    ...rest,
-    headers: kept,
-    body: bodyRest,
-    ...(parts === undefined ? {} : { parts: parts.map((each) => metadataPart(each, wanted)) }),
+    ...message,
+    payload: {
+      ...rest,
+      headers: (headers ?? []).filter((each) => wanted.includes(each.name)),
+      body: size,
+    },
   };
 }
 
-function metadataOnly(message: Json, wanted: string[]): Json {
-  return { ...message, payload: metadataPart(message["payload"] as Json, wanted) };
+/** Whether a message payload has a part with a file name, as Gmail's `has:attachment` sees it. */
+const hasFile = (part: Json): boolean =>
+  (typeof part["filename"] === "string" && part["filename"] !== "") ||
+  ((part["parts"] as Json[] | undefined) ?? []).some(hasFile);
+
+function deliveredMessage(id: string, threadId: string, historyId: number, delivery: Delivery) {
+  return {
+    id,
+    threadId,
+    labelIds: delivery.labels ?? ["INBOX", "UNREAD"],
+    historyId: String(historyId),
+    payload: {
+      mimeType: "text/plain",
+      headers: headers({
+        From: delivery.from,
+        To: SELF,
+        Date: "Wed, 7 Oct 2026 11:00:00 +0200",
+        Subject: delivery.subject ?? "Re: new mail",
+        "Message-ID": `<${id}@example.com>`,
+      }),
+      body: textPart("text/plain", delivery.text).body,
+    },
+  };
 }
 
 export function fakeGmail(): FakeGmail {
@@ -148,6 +177,10 @@ export function fakeGmail(): FakeGmail {
   const throttle = { status: 429, retryAfter: "0", times: 0 };
   let hits = 0;
   let draftCount = 0;
+  let historyId = 12;
+  let oldestHistory = 0;
+  let delivered = 0;
+  const events: { historyId: number; message: Json }[] = [];
 
   const throttled = (): Response | null => {
     if (throttle.times <= 0) return null;
@@ -165,9 +198,14 @@ export function fakeGmail(): FakeGmail {
     const url = new URL(request.url);
     const path = url.pathname.replace("/gmail/v1/users/me", "");
     const routes: [string, RegExp, (found: RegExpExecArray) => Response | Promise<Response>][] = [
-      ["GET", /^\/profile$/, () => Response.json({ emailAddress: SELF, historyId: "12" })],
+      [
+        "GET",
+        /^\/profile$/,
+        () => Response.json({ emailAddress: SELF, historyId: String(historyId) }),
+      ],
       ["GET", /^\/threads$/, () => listThreads(url)],
-      ["GET", /^\/history$/, () => Response.json({ historyId: "12", history: [] })],
+      ["GET", /^\/history$/, () => readHistory(url)],
+      ["GET", /^\/messages\/([^/]+)$/, (found) => readMessage(found[1] ?? "", url)],
       ["GET", /^\/threads\/([^/]+)$/, (found) => readThread(found[1] ?? "", url)],
       [
         "GET",
@@ -184,12 +222,16 @@ export function fakeGmail(): FakeGmail {
     return new Response(`unknown ${request.method} ${path}`, { status: 404 });
   };
 
+  /** `has:attachment` keeps the threads with a file in them; the rest is matched as before. */
   const listThreads = (url: URL): Response => {
-    const q = (url.searchParams.get("q") ?? "").toLowerCase();
+    const asked = (url.searchParams.get("q") ?? "").toLowerCase();
+    const attachment = asked.includes("has:attachment");
+    const q = asked.replace("has:attachment", "").trim();
     const max = Number(url.searchParams.get("maxResults") ?? 100);
     const hit = [...threads.entries()].filter(
       ([, messages]) =>
-        q === "" || q.includes(":") || JSON.stringify(messages).toLowerCase().includes(q),
+        (!attachment || messages.some((each) => hasFile(each["payload"] as Json))) &&
+        (q === "" || q.includes(":") || JSON.stringify(messages).toLowerCase().includes(q)),
     );
     return Response.json({ threads: hit.slice(0, max).map(([id]) => ({ id })) });
   };
@@ -203,6 +245,37 @@ export function fakeGmail(): FakeGmail {
       id,
       messages: metadata ? messages.map((each) => metadataOnly(each, wanted)) : messages,
     });
+  };
+
+  const readHistory = (url: URL): Response => {
+    const start = Number(url.searchParams.get("startHistoryId") ?? 0);
+    if (start < oldestHistory) return new Response("history too old", { status: 404 });
+    const history = events
+      .filter((each) => each.historyId > start)
+      .map((each) => ({ id: String(each.historyId), messagesAdded: [{ message: each.message }] }));
+    return Response.json({
+      historyId: String(historyId),
+      ...(history.length === 0 ? {} : { history }),
+    });
+  };
+
+  const readMessage = (id: string, url: URL): Response => {
+    const wanted = url.searchParams.getAll("metadataHeaders");
+    for (const messages of threads.values()) {
+      const found = messages.find((each) => each["id"] === id);
+      if (found !== undefined) return Response.json(metadataOnly(found, wanted));
+    }
+    return new Response("not found", { status: 404 });
+  };
+
+  const deliver = (threadId: string, delivery: Delivery): string => {
+    const id = `d${++delivered}`;
+    historyId++;
+    const message = deliveredMessage(id, threadId, historyId, delivery);
+    threads.set(threadId, [...(threads.get(threadId) ?? []), message]);
+    const labelIds = message.labelIds;
+    events.push({ historyId, message: { id, threadId, labelIds } });
+    return id;
   };
 
   const readAttachment = (id: string): Response => {
@@ -222,5 +295,15 @@ export function fakeGmail(): FakeGmail {
     return Response.json({ id, message: { id: `dm-${id}`, threadId: sent.message.threadId } });
   };
 
-  return { provider, threads, drafts, throttle, hits: () => hits };
+  return {
+    provider,
+    threads,
+    drafts,
+    throttle,
+    hits: () => hits,
+    deliver,
+    expireHistory: () => {
+      oldestHistory = historyId + 1;
+    },
+  };
 }

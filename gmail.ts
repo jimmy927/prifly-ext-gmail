@@ -2,8 +2,8 @@
  * A small Gmail REST client over `api.connections.fetch`: prifly adds the
  * token, so none is kept here. Every method answers a value or a typed
  * failure (the grant ended, or Gmail answered an error status) and never
- * throws for those. There is deliberately no send method. `profile` and
- * `history` are used by no tool yet; they are kept for the poller to come.
+ * throws for those. There is deliberately no send method. `profile`,
+ * `history`, `threadIds` and `sender` are the poller's.
  */
 
 import type { ExtensionConnectionsApi } from "@prifly/extension-api";
@@ -17,7 +17,7 @@ import {
   parseThread,
   str,
 } from "./gmail-types";
-import { headerValue, type Mailbox, parseAddresses, readMessage } from "./mime";
+import { headerValue, type Mailbox, parseAddresses } from "./mime";
 
 export const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
 
@@ -45,8 +45,6 @@ export type ThreadSummary = {
   senders: Mailbox[];
   /** Everyone on it (From, To and Cc), the senders first. */
   people: Mailbox[];
-  /** The attachments the thread's messages list. */
-  attachments: number;
 };
 
 export type Draft = { id: string; threadId: string };
@@ -59,6 +57,10 @@ export type HistoryAnswer = {
 export type GmailClient = {
   profile(): Promise<GmailResult<{ emailAddress: string; historyId: string }>>;
   searchThreads(q: string, max: number): Promise<GmailResult<ThreadSummary[]>>;
+  /** Only the ids of the threads a search finds: one request, no metadata calls. */
+  threadIds(q: string, max: number): Promise<GmailResult<string[]>>;
+  /** Who a message is from, as its From header says. */
+  sender(messageId: string): Promise<GmailResult<Mailbox>>;
   thread(id: string): Promise<GmailResult<GmailThread>>;
   /** The attachment's bytes, base64url. */
   attachment(messageId: string, attachmentId: string): Promise<GmailResult<string>>;
@@ -114,10 +116,6 @@ function summarise(id: string, thread: GmailThread): ThreadSummary {
     subject: headers(first, "Subject"),
     senders: mailboxes(thread, ["From"]),
     people: mailboxes(thread, ["From", "To", "Cc"]),
-    attachments: thread.messages.reduce(
-      (count, message) => count + readMessage(message.payload).attachments.length,
-      0,
-    ),
   };
 }
 
@@ -183,6 +181,15 @@ export function gmailClient(options: GmailClientOptions): GmailClient {
     return { ok: true, value: out };
   };
 
+  const threadIds = async (q: string, max: number): Promise<GmailResult<string[]>> => {
+    const query = new URLSearchParams({ q, maxResults: String(max) });
+    const found = await json(`/threads?${query}`);
+    if (!found.ok) return found;
+    const data = isRecord(found.value) ? found.value : {};
+    const ids = list(data["threads"]).map((each) => (isRecord(each) ? str(each["id"]) : ""));
+    return { ok: true, value: ids.filter((id) => id !== "") };
+  };
+
   const draftBody = (raw: string, threadId?: string) => ({
     message: threadId === undefined || threadId === "" ? { raw } : { raw, threadId },
   });
@@ -199,12 +206,20 @@ export function gmailClient(options: GmailClientOptions): GmailClient {
     },
 
     async searchThreads(q, max) {
-      const query = new URLSearchParams({ q, maxResults: String(max) });
-      const found = await json(`/threads?${query}`);
-      if (!found.ok) return found;
-      const data = isRecord(found.value) ? found.value : {};
-      const ids = list(data["threads"]).map((each) => (isRecord(each) ? str(each["id"]) : ""));
-      return await summaries(ids.filter((id) => id !== ""));
+      const ids = await threadIds(q, max);
+      return ids.ok ? await summaries(ids.value) : ids;
+    },
+
+    threadIds,
+
+    async sender(messageId) {
+      const query = new URLSearchParams({ format: "metadata" });
+      query.append("metadataHeaders", "From");
+      const got = await json(`/messages/${encodeURIComponent(messageId)}?${query}`);
+      if (!got.ok) return got;
+      const message = parseMessage(got.value);
+      const from = parseAddresses(headerValue(message.payload.headers, "From"))[0];
+      return { ok: true, value: from ?? { name: "", address: "" } };
     },
 
     thread: (id) => asThread(id, "format=full"),

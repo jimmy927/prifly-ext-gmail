@@ -31,7 +31,14 @@ import type { GmailThread } from "./gmail-types";
 import { base64urlBytes, readMessage } from "./mime";
 import { safeFilename, saveThread } from "./save";
 import { signInLaunch } from "./sign-in";
-import { readState, recordSession, type State, type ThreadRecord, writeState } from "./state";
+import {
+  readState,
+  recordSession,
+  type State,
+  type ThreadInfo,
+  type ThreadRecord,
+  writeState,
+} from "./state";
 import { carriedImages, isImageType, slugOf, threadPrompt } from "./thread-prompt";
 
 /** The most a picture may weigh to be fetched into the thread's view. */
@@ -112,7 +119,7 @@ export async function open(api: ExtensionApi, key: string): Promise<LaunchItem> 
 }
 
 /** What `launch` knew of a thread, for the chip `launched` puts on its session. */
-const pending = new Map<string, Omit<ThreadRecord, "sessions">>();
+const pending = new Map<string, ThreadInfo>();
 
 /** The session a card starts, or an empty prompt and a message for the rows that are not cards. */
 export async function launch(api: ExtensionApi, key: string): Promise<Launch> {
@@ -150,13 +157,18 @@ function cut(subject: string): string {
     : subject;
 }
 
+/** The chip of a session started from a thread; "new reply" once mail has come in since. */
 function chip(threadId: string, record: ThreadRecord): Decoration {
+  const replied = record.newSince > 0;
+  const details = [record.subject, record.people.join(", ")].filter((line) => line !== "");
   return {
     key: threadId,
     icon: MAIL_ICON,
-    label: `Gmail: ${cut(record.subject)}`,
-    tone: "info",
-    details: [record.subject, record.people.join(", ")].filter((line) => line !== ""),
+    label: replied
+      ? `Gmail: new reply from ${record.lastFrom === "" ? "someone" : record.lastFrom}`
+      : `Gmail: ${cut(record.subject)}`,
+    tone: replied ? "warning" : "info",
+    details: replied ? [...details, `${record.newSince} new since the session started`] : details,
     url: record.url,
     launcher: LAUNCH_ID,
   };

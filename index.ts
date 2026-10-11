@@ -1,9 +1,9 @@
 /**
  * The Gmail extension: what prifly imports. `activate` is given the api,
  * registers the four MCP tools that search, read and draft Gmail through the
- * reader's Google connection, and puts back the chips of the sessions started
- * from a thread. `choices`, `open`, `launch` and `launched` are the launcher
- * "From a Gmail thread…" (`launcher.ts`). Types come from
+ * reader's Google connection, puts back the chips of the sessions started
+ * from a thread and starts the poller (`poll.ts`). `choices`, `open`, `launch`
+ * and `launched` are the launcher "From a Gmail thread…" (`launcher.ts`). Types come from
  * `@prifly/extension-api` with `import type`, so nothing of it is loaded at
  * run time.
  */
@@ -16,6 +16,7 @@ import type {
   LaunchItem,
 } from "@prifly/extension-api";
 import * as launcher from "./launcher";
+import { startPoller } from "./poll";
 import { readState } from "./state";
 import { gmailTools } from "./tools";
 
@@ -28,8 +29,10 @@ export function activate(given: ExtensionApi): () => void {
   void readState(given.folder).then((state) => {
     if (api === given) launcher.showChips(given, state);
   });
+  const stopPoller = startPoller(given);
   given.log("activated");
   return () => {
+    stopPoller();
     api = null;
   };
 }

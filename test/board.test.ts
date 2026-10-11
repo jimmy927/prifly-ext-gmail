@@ -3,8 +3,9 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LaunchBoard, LaunchChoice } from "@prifly/extension-api";
-import { clock, columnsOf, formatWhen, SWITCH_KEY } from "../board";
+import { clock, columnsOf, formatWhen, SWITCH_KEY, withAttachment } from "../board";
 import { choices, launch } from "../index";
+import { tick } from "../poll";
 import { FIRST_ACCOUNT, SECOND_ACCOUNT, world } from "./world";
 
 let temp = "";
@@ -76,7 +77,16 @@ test("the default board has Unread, Inbox and Starred columns, ids c0..c2", asyn
     .map((request) => new URL(request.url))
     .filter((url) => url.pathname.endsWith("/threads"))
     .map((url) => url.searchParams.get("q"));
-  expect(searches).toEqual(["is:unread in:inbox", "in:inbox", "is:starred"]);
+  expect(searches.filter((q) => !q?.endsWith("has:attachment"))).toEqual([
+    "is:unread in:inbox",
+    "in:inbox",
+    "is:starred",
+  ]);
+  expect(searches.filter((q) => q?.endsWith("has:attachment")).sort()).toEqual([
+    "in:inbox has:attachment",
+    "is:starred has:attachment",
+    "is:unread in:inbox has:attachment",
+  ]);
   expect(w.connections.requests.every((request) => !request.url.includes("send"))).toBe(true);
 });
 
@@ -101,7 +111,7 @@ test("a card carries subject, senders and date, people, badges and the Gmail lin
     detail: "Ada, Bob · 5 Oct",
     people: ["Ada Lovelace", "Bob", "carol@example.com"],
     url: "https://mail.google.com/mail/u/0/#all/t1",
-    badges: { comments: 2, attachments: 2 },
+    badges: { comments: 2, attachments: 1 },
   });
   expect(second).toEqual({
     key: "t2",
@@ -128,7 +138,7 @@ test("a typed filter is one Results column for that Gmail query", async () => {
   const searches = w.connections.requests
     .map((request) => new URL(request.url))
     .filter((url) => url.pathname.endsWith("/threads"));
-  expect(searches.map((url) => url.searchParams.get("q"))).toEqual(["dana"]);
+  expect(searches.map((url) => url.searchParams.get("q"))).toEqual(["dana", "dana has:attachment"]);
 });
 
 test("with no Google account the board is the one Connect row, and its launch connects", async () => {
@@ -205,6 +215,8 @@ test("Switch account is offered with two connections only, and moves the board t
   expect(JSON.parse(await readFile(join(temp, "state.json"), "utf8")).account).toBe("g-2");
 
   await launch("thread", SWITCH_KEY);
+  // The first account's board was read a while ago: it is read again.
+  clock.now = () => new Date("Wed, 7 Oct 2026 12:05:00 +0200");
   await choices("thread", "");
   expect(lastBearer()).toStartWith("Bearer token-g-1-");
 });
@@ -218,4 +230,104 @@ test("an HTTP 500 from Gmail is one muted row with the error text, not a throw",
   expect(rows[0]?.title).toStartWith("Gmail answered 500 for jimmy@example.com:");
   expect(rows[0]?.tone).toBe("muted");
   expect(w.fake.flags.get("thread") ?? null).toBeNull();
+});
+
+const requestsOf = (w: ReturnType<typeof started>) => w.connections.requests.length;
+
+test("a second choices within pollSeconds makes no Gmail request", async () => {
+  const w = started();
+  const first = asBoard(await choices("thread", ""));
+  const sent = requestsOf(w);
+  expect(sent).toBeGreaterThan(0);
+  clock.now = () => new Date("Wed, 7 Oct 2026 12:01:00 +0200");
+  expect(asBoard(await choices("thread", ""))).toEqual(first);
+  expect(requestsOf(w)).toBe(sent);
+});
+
+test("the cache is read again once pollSeconds have passed", async () => {
+  const w = started({ settings: { pollSeconds: 60 } });
+  await choices("thread", "");
+  const sent = requestsOf(w);
+  clock.now = () => new Date("Wed, 7 Oct 2026 12:00:59 +0200");
+  await choices("thread", "");
+  expect(requestsOf(w)).toBe(sent);
+  clock.now = () => new Date("Wed, 7 Oct 2026 12:01:00 +0200");
+  await choices("thread", "");
+  expect(requestsOf(w)).toBeGreaterThan(sent);
+});
+
+test("after the poller marks it stale the board reads Gmail again", async () => {
+  const w = started();
+  await tick(w.fake.api);
+  await choices("thread", "");
+  const sent = requestsOf(w);
+  await choices("thread", "");
+  expect(requestsOf(w)).toBe(sent);
+
+  w.gmail.deliver("t3", { from: "Karin <karin@example.com>", text: "Hi", subject: "New" });
+  await tick(w.fake.api);
+  const afterTick = requestsOf(w);
+  const board = asBoard(await choices("thread", ""));
+  expect(requestsOf(w)).toBeGreaterThan(afterTick);
+  expect(board.items.map((each) => each.key)).toContain("t3");
+  // Read once more, the board is cached again.
+  const cached = requestsOf(w);
+  await choices("thread", "");
+  expect(requestsOf(w)).toBe(cached);
+});
+
+test("each account has its own cached board", async () => {
+  const w = started({ accounts: [FIRST_ACCOUNT, SECOND_ACCOUNT] });
+  await choices("thread", "");
+  const sent = requestsOf(w);
+  await launch("thread", SWITCH_KEY);
+  await choices("thread", "");
+  expect(requestsOf(w)).toBeGreaterThan(sent);
+});
+
+test("a typed filter reads Gmail, but the same one within 2 s reuses the answer", async () => {
+  const w = started();
+  await choices("thread", "");
+  const first = asBoard(await choices("thread", "dana"));
+  const sent = requestsOf(w);
+  expect(asBoard(await choices("thread", "dana"))).toEqual(first);
+  expect(requestsOf(w)).toBe(sent);
+
+  await choices("thread", "ada");
+  expect(requestsOf(w)).toBeGreaterThan(sent);
+
+  const second = requestsOf(w);
+  clock.now = () => new Date("Wed, 7 Oct 2026 12:00:03 +0200");
+  await choices("thread", "ada");
+  expect(requestsOf(w)).toBeGreaterThan(second);
+});
+
+test("metadata answers carry no parts, as in Gmail", async () => {
+  const w = started();
+  const url = "https://gmail.googleapis.com/gmail/v1/users/me/threads/t1?format=metadata";
+  const answer = await w.gmail.provider(new Request(`${url}&metadataHeaders=Subject`));
+  const thread = (await answer.json()) as { messages: { payload: Record<string, unknown> }[] };
+  expect(thread.messages.length).toBe(2);
+  for (const message of thread.messages) {
+    expect(message.payload["parts"]).toBeUndefined();
+    expect(JSON.stringify(message.payload)).not.toContain("attachmentId");
+  }
+});
+
+test("the paperclip comes from the has:attachment search, with no count", async () => {
+  const w = started({ settings: { columns: "All=in" } });
+  const board = asBoard(await choices("thread", ""));
+  const badges = Object.fromEntries(board.items.map((each) => [each.key, each.badges]));
+  expect(badges["t1"]).toEqual({ comments: 2, attachments: 1 });
+  expect(badges["t2"]).toBeUndefined();
+  const searches = w.connections.requests
+    .map((request) => new URL(request.url))
+    .filter((url) => url.pathname.endsWith("/threads"))
+    .map((url) => url.searchParams.get("q"));
+  expect(searches.sort()).toEqual(["in", "in has:attachment"]);
+});
+
+test("a column with OR is bracketed before has:attachment is added", () => {
+  expect(withAttachment("from:a OR from:b")).toBe("(from:a OR from:b) has:attachment");
+  expect(withAttachment("is:starred")).toBe("is:starred has:attachment");
 });

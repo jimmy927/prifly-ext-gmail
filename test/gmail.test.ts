@@ -86,7 +86,6 @@ test("search lists thread summaries: last date and sender, first subject", async
           { name: "Jimmy", address: "jimmy@example.com" },
           { name: "", address: "carol@example.com" },
         ],
-        attachments: 2,
       },
       {
         id: "t2",
@@ -99,7 +98,6 @@ test("search lists thread summaries: last date and sender, first subject", async
           { name: "Dana", address: "dana@example.com" },
           { name: "", address: "jimmy@example.com" },
         ],
-        attachments: 0,
       },
     ],
   });

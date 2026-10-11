@@ -8,13 +8,23 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isRecord, list, str } from "./gmail-types";
 
+const num = (value: unknown): number =>
+  typeof value === "number" && Number.isFinite(value) ? value : 0;
+
 export type ThreadRecord = {
   subject: string;
   /** Participant names, for the chip's hover. */
   people: string[];
   url: string;
   sessions: string[];
+  /** Messages that arrived in the thread since a session was last started from it. */
+  newSince: number;
+  /** Who wrote the latest of them, as the chip's label says. */
+  lastFrom: string;
 };
+
+/** What `launch` knows of a thread, before any session or reply. */
+export type ThreadInfo = Omit<ThreadRecord, "sessions" | "newSince" | "lastFrom">;
 
 export type State = {
   /** The id of the connection the board shows; "" means the setting's, else the first. */
@@ -38,6 +48,8 @@ function parseRecord(value: unknown): ThreadRecord {
     sessions: list(each["sessions"])
       .map(str)
       .filter((id) => id !== ""),
+    newSince: Math.max(0, Math.floor(num(each["newSince"]))),
+    lastFrom: str(each["lastFrom"]),
   };
 }
 
@@ -63,16 +75,18 @@ export async function writeState(folder: string, state: State): Promise<void> {
   await writeFile(join(folder, FILE), `${JSON.stringify(state, null, 2)}\n`);
 }
 
-/** Notes that `sessionId` was started from `threadId`; a session is recorded once. */
+/** Notes that `sessionId` was started from `threadId`; a session is recorded once. A new start clears the new-reply count. */
 export function recordSession(
   state: State,
   threadId: string,
-  record: Omit<ThreadRecord, "sessions">,
+  record: ThreadInfo,
   sessionId: string,
 ): void {
   const sessions = state.threads[threadId]?.sessions ?? [];
   state.threads[threadId] = {
     ...record,
+    newSince: 0,
+    lastFrom: "",
     sessions: sessions.includes(sessionId) ? sessions : [...sessions, sessionId],
   };
 }
