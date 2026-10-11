@@ -12,7 +12,7 @@ import { activeConnection, clientFor, columnsOf } from "./board";
 import type { GmailClient, GmailFailure, HistoryAnswer } from "./gmail";
 import { showChips } from "./launcher";
 import { applyFlag, markStale, pollSeconds, type Runtime, runtimeOf } from "./runtime";
-import { readState, writeState } from "./state";
+import { readState, type State, writeState } from "./state";
 
 /** The first tick comes soon after `activate`, so the flag does not wait a whole interval. */
 const FIRST_TICK_MS = 3000;
@@ -41,19 +41,31 @@ const incoming = (added: Added): Added =>
   added.filter((each) => !each.labelIds.includes("DRAFT") && !each.labelIds.includes("SENT"));
 
 /** Turns the chips of the sessions whose thread got mail; the state file keeps the count. */
-async function markReplies(api: ExtensionApi, client: GmailClient, added: Added): Promise<void> {
-  const state = await readState(api.folder);
+/** Per thread a session came from: how many messages arrived and the id of the last. */
+function repliesIn(state: State, added: Added): Map<string, { id: string; count: number }> {
   const latest = new Map<string, { id: string; count: number }>();
   for (const each of incoming(added)) {
     if ((state.threads[each.threadId]?.sessions.length ?? 0) === 0) continue;
     latest.set(each.threadId, { id: each.id, count: (latest.get(each.threadId)?.count ?? 0) + 1 });
   }
+  return latest;
+}
+
+async function markReplies(api: ExtensionApi, client: GmailClient, added: Added): Promise<void> {
+  const latest = repliesIn(await readState(api.folder), added);
   if (latest.size === 0) return;
-  for (const [threadId, { id, count }] of latest) {
-    const record = state.threads[threadId];
+  const senders = new Map<string, string>();
+  for (const [threadId, { id }] of latest) {
     const from = await client.sender(id);
+    senders.set(threadId, from.ok ? from.value.name || from.value.address : "");
+  }
+  // Read again after the requests, and write with nothing awaited between: a session
+  // launched or an account switched meanwhile is kept.
+  const state = await readState(api.folder);
+  for (const [threadId, { count }] of latest) {
+    const record = state.threads[threadId];
     if (record === undefined) continue;
-    const who = from.ok ? from.value.name || from.value.address : "";
+    const who = senders.get(threadId) ?? "";
     state.threads[threadId] = {
       ...record,
       newSince: record.newSince + count,

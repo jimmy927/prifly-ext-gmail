@@ -168,6 +168,11 @@ export async function switchAccount(api: ExtensionApi): Promise<Launch> {
   const next = all[(at + 1) % Math.max(all.length, 1)];
   if (next === undefined) return { prompt: "", message: "No Google account is connected." };
   await writeState(api.folder, { ...state, account: next.id });
+  // What the poller knew belongs to the account just left; the next tick counts the new one.
+  const runtime = runtimeOf(api);
+  runtime.signedOut = false;
+  runtime.unread = null;
+  applyFlag(api);
   return { prompt: "", message: `Showing ${next.account}.` };
 }
 
@@ -256,7 +261,10 @@ async function read(
     return found;
   }
   const columns = columnsOf(api.settings?.["columns"]);
-  const cached = cachedColumns(runtime, connection.id, columns, now, pollSeconds(api) * 1000);
+  // With the grant ended a cached board would show cards under the "Sign in again" flag.
+  const cached = runtime.signedOut
+    ? null
+    : cachedColumns(runtime, connection.id, columns, now, pollSeconds(api) * 1000);
   if (cached !== null) return { ok: true, columns: cached };
   const version = versionOf(runtime, connection.id);
   const found = await search(client, columns);

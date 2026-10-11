@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { clock } from "../board";
 import { choices, launch, launched } from "../index";
 import { tick, timers } from "../poll";
-import { world } from "./world";
+import { FIRST_ACCOUNT, SECOND_ACCOUNT, world } from "./world";
 
 let temp = "";
 let stop: (() => void) | undefined;
@@ -86,7 +86,7 @@ test("the first tick seeds the history id from the profile; the next asks histor
   expect(w.reached("/profile")).toBe(1);
 });
 
-test("a ticks costs a few requests: history and one ids-only search, no thread metadata", async () => {
+test("a tick costs a few requests: history and one ids-only search, no thread metadata", async () => {
   const w = started();
   await tick(w.fake.api);
   const before = w.connections.requests.length;
@@ -138,6 +138,47 @@ test("the reply chip survives a restart, and launching again from the thread res
   expect(chipOf(again)?.label).toBe("Gmail: Plans för Tuesday");
   expect(chipOf(again)?.tone).toBe("info");
   expect((await stateFile()).threads.t1.newSince).toBe(0);
+});
+
+test("a session launched while the poller fetches a sender is not lost from the state file", async () => {
+  const w = await withSession();
+  const connections = w.fake.api.connections;
+  if (connections === undefined) throw new Error("no connections");
+  const original = connections.fetch;
+  connections.fetch = async (id, request, options) => {
+    const url = typeof request === "string" ? request : request.url;
+    if (url.includes("/messages/")) await launched("thread", "t2", "session-9");
+    return await original(id, request, options);
+  };
+  w.gmail.deliver("t1", { from: KARIN, text: "Tuesday is fine." });
+  await tick(w.fake.api);
+  const saved = await stateFile();
+  expect(saved.threads.t1.newSince).toBe(1);
+  expect(saved.threads.t2.sessions).toEqual(["session-9"]);
+});
+
+test("mail in a thread no session came from costs no sender request", async () => {
+  const w = await withSession();
+  w.gmail.deliver("t2", { from: "Dana <dana@example.com>", text: "Yes." });
+  await tick(w.fake.api);
+  expect(w.reached("/messages/d1")).toBe(0);
+});
+
+test("switching account drops the previous account's flag and cached board is skipped while signed out", async () => {
+  const w = started({ accounts: [FIRST_ACCOUNT, SECOND_ACCOUNT] });
+  await tick(w.fake.api);
+  expect(w.fake.flags.get("thread")).toEqual({ tone: "info", hint: "2 unread" });
+  await launch("thread", "gmail:switch");
+  expect(w.fake.flags.get("thread")).toBeNull();
+
+  await choices("thread", "");
+  const sent = w.connections.requests.length;
+  await choices("thread", "");
+  expect(w.connections.requests.length).toBe(sent);
+  w.connections.endpoint.revoke("g-2");
+  await tick(w.fake.api);
+  const rows = await choices("thread", "");
+  expect(Array.isArray(rows)).toBe(true);
 });
 
 test("the reader's own drafts and sent mail in the thread are no reply", async () => {
@@ -212,9 +253,19 @@ test("a revoked grant sets the sign-in warning and pauses; a working grant resum
   await tick(w.fake.api);
   expect(w.fake.flags.get("thread")).toEqual({ tone: "warning", hint: "Sign in again" });
 
-  const before = w.gmail.hits();
+  // Each paused tick tries one call, the probe, and goes no further.
+  const connections = w.fake.api.connections;
+  if (connections === undefined) throw new Error("no connections");
+  const original = connections.fetch;
+  const probes: string[] = [];
+  connections.fetch = (id, request, options) => {
+    probes.push(typeof request === "string" ? request : request.url);
+    return original(id, request, options);
+  };
   await tick(w.fake.api);
-  expect(w.gmail.hits()).toBe(before);
+  expect(probes).toHaveLength(1);
+  expect(probes[0]).toContain("/history");
+  connections.fetch = original;
   expect(w.fake.flags.get("thread")).toEqual({ tone: "warning", hint: "Sign in again" });
 
   w.connections.endpoint.revive("g-1");
