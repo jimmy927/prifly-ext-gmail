@@ -1,33 +1,42 @@
 {
-  "id": "template",
-  "name": "Template",
-  "description": "A minimal prifly extension to start a plugin from: one MCP tool, one launch board, one panel.",
+  "id": "gmail",
+  "name": "Gmail",
+  "description": "Search, read and draft replies in Gmail from any session, through your Google account. It never sends.",
   "version": "0.1.0",
   "main": "index.ts",
+  "prompt": "prompt.md",
   "connections": [
     {
-      "provider": "microsoft",
-      "scopes": ["User.Read"],
-      "why": "Reads your name, to show which account the template's tool uses."
+      "provider": "google",
+      "scopes": [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.compose"
+      ],
+      "why": "Searches and reads your mail and writes draft replies. It never sends."
     }
   ],
-  "launch": [
+  "settings": [
     {
-      "id": "things",
-      "label": "Template things",
-      "icon": "box",
-      "description": "Start a session from one of the template's things",
-      "searchPlaceholder": "Search things"
-    }
-  ],
-  "panels": [
+      "id": "columns",
+      "label": "Columns",
+      "description": "Gmail searches, as Name=Gmail search pairs separated by ;",
+      "type": "string",
+      "default": "Unread=is:unread in:inbox; Inbox=in:inbox; Starred=is:starred"
+    },
     {
-      "id": "things",
-      "label": "Template",
-      "icon": "box",
-      "description": "The template's things, in a window of its own",
-      "folder": "panel",
-      "page": "index.html"
+      "id": "pollSeconds",
+      "label": "Check for new mail every (seconds)",
+      "type": "number",
+      "default": 90,
+      "min": 30,
+      "max": 900
+    },
+    {
+      "id": "account",
+      "label": "Google account",
+      "description": "The email of the connected account to use; empty means the first connected Google account.",
+      "type": "string",
+      "default": ""
     }
   ]
 }
