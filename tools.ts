@@ -9,7 +9,7 @@ import type { ExtensionApi, ExtensionTool, ExtensionToolContext } from "@prifly/
 import { NO_CONNECTION, pickConnection } from "./connection";
 import { failureText, type GmailClient, gmailClient, type ThreadSummary } from "./gmail";
 import { buildNew, buildReply, readMessage } from "./mime";
-import { saveThread, threadMarkdown } from "./save";
+import { safeFilename, saveThread, threadMarkdown } from "./save";
 
 /** prifly is adding `scratchpad` (an absolute folder) to the context; v0.1.0 does not have it. */
 type ToolContext = ExtensionToolContext & { scratchpad?: string };
@@ -87,6 +87,20 @@ function searchTool(getApi: () => ExtensionApi | null): ExtensionTool {
   };
 }
 
+/** Where a thread is saved: the session's scratchpad, else the extension's folder; null with neither. */
+function threadFolder(
+  scratchpad: string | undefined,
+  extensionFolder: string | undefined,
+  threadId: string,
+): string | null {
+  const name = safeFilename(threadId);
+  if (scratchpad !== undefined && scratchpad !== "") return join(scratchpad, "gmail", name);
+  if (extensionFolder !== undefined && extensionFolder !== "") {
+    return join(extensionFolder, "threads", name);
+  }
+  return null;
+}
+
 function threadTool(getApi: () => ExtensionApi | null): ExtensionTool {
   return {
     name: "gmail_thread",
@@ -101,10 +115,10 @@ function threadTool(getApi: () => ExtensionApi | null): ExtensionTool {
         if (id === "") return "thread_id is required.";
         const got = await client.thread(id);
         if (!got.ok) return failureText(got);
-        const folder =
-          ctx.scratchpad === undefined
-            ? join(getApi()?.folder ?? ".", "threads", id)
-            : join(ctx.scratchpad, "gmail", id);
+        const folder = threadFolder(ctx.scratchpad, getApi()?.folder, id);
+        if (folder === null) {
+          return `${threadMarkdown(got.value)}\n---\nNothing was saved: this session has no scratchpad and the extension has no folder.`;
+        }
         const saved = await saveThread(client, got.value, folder);
         const lines = [threadMarkdown(got.value), "---", `Saved in ${saved.folder}:`];
         lines.push(...saved.paths.map((path) => `- ${path}`));

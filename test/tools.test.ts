@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -66,6 +66,20 @@ test("without a scratchpad gmail_thread saves under the extension's folder", asy
   await w.call("gmail_thread", { thread_id: "t1" });
   expect(existsSync(join(temp, "threads", "t1", "thread.md"))).toBe(true);
   expect(existsSync(join(temp, "threads", "t1", "logo.png"))).toBe(true);
+});
+
+test("with no scratchpad and no folder gmail_thread returns the text and writes nothing", async () => {
+  const w = started({ folder: "" });
+  const before = process.cwd();
+  process.chdir(temp);
+  try {
+    const answer = await w.call("gmail_thread", { thread_id: "t1" });
+    expect(answer).toContain("# Plans för Tuesday");
+    expect(answer).toContain("Nothing was saved");
+    expect(readdirSync(temp)).toEqual([]);
+  } finally {
+    process.chdir(before);
+  }
 });
 
 test("two attachments with one name are numbered, and a path cannot leave the folder", async () => {

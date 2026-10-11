@@ -30,7 +30,7 @@ connected Google account.
 | Tool | What it does |
 |---|---|
 | `gmail_search` `{ query, max }` | Gmail search; one line per thread: `thread_id \| N msg \| date \| from \| subject` |
-| `gmail_thread` `{ thread_id }` | The whole thread as Markdown, oldest first; saves `thread.md` and every attachment (up to 25 MB each) in the session's scratchpad and lists the paths |
+| `gmail_thread` `{ thread_id }` | The whole thread as Markdown, oldest first; saves `thread.md` and every attachment (up to 25 MB each) in the session's scratchpad (else in the extension's own `threads/<id>/` folder, which is git-ignored; with neither, nothing is saved) and lists the paths |
 | `gmail_draft_reply` `{ thread_id, body, all, replace_draft_id }` | A threaded reply draft (`Re:`, In-Reply-To, References); `all` (default true) keeps everyone else on Cc; `replace_draft_id` rewrites a draft instead of adding one |
 | `gmail_new_draft` `{ to, cc, subject, body }` | A new draft |
 
@@ -42,7 +42,8 @@ says to connect one.
 
 - `columns`: `Name=Gmail search` pairs separated by `;` (for a launcher board
   to come).
-- `pollSeconds`: how often to check for new mail, 30 to 900 (default 90).
+- `pollSeconds`: how often to check for new mail, 30 to 900 (default 90; for a poller to
+  come).
 - `account`: the email of the account to use; empty means the first one.
 
 ## Checks

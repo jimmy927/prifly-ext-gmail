@@ -26,6 +26,7 @@
     {
       "id": "pollSeconds",
       "label": "Check for new mail every (seconds)",
+      "description": "For a poller to come: nothing checks for new mail yet.",
       "type": "number",
       "default": 90,
       "min": 30,

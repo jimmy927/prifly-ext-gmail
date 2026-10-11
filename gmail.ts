@@ -2,7 +2,8 @@
  * A small Gmail REST client over `api.connections.fetch`: prifly adds the
  * token, so none is kept here. Every method answers a value or a typed
  * failure (the grant ended, or Gmail answered an error status) and never
- * throws for those. There is deliberately no send method.
+ * throws for those. There is deliberately no send method. `profile` and
+ * `history` are used by no tool yet; they are kept for the poller to come.
  */
 
 import type { ExtensionConnectionsApi } from "@prifly/extension-api";
@@ -102,6 +103,7 @@ export function gmailClient(options: GmailClientOptions): GmailClient {
       const answer = await connections.fetch(connection, new Request(url, init));
       if ("needsSignIn" in answer) return { ok: false, kind: "sign-in", account };
       if (RETRY_STATUSES.includes(answer.status) && attempt === 0) {
+        await answer.text();
         await sleep(retryWait(answer) * 1000);
         continue;
       }
