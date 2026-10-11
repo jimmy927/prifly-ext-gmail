@@ -45,8 +45,8 @@ import { carriedImages, isImageType, slugOf, threadPrompt } from "./thread-promp
 const MAX_VIEW_IMAGE_BYTES = 2 * 1024 * 1024;
 const CHIP_SUBJECT_CHARS = 50;
 
-/** prifly is adding "mail" to its icons; v0.1.0 of the api does not list it yet. */
-const MAIL_ICON = "mail" as string as DecorationIcon;
+/** The Gmail mark, in the api's icon list since v0.5.0. */
+const GMAIL_ICON: DecorationIcon = "gmail";
 
 /** The connection and client the launcher uses now, or why there is none. */
 async function session(
@@ -163,7 +163,7 @@ function chip(threadId: string, record: ThreadRecord): Decoration {
   const details = [record.subject, record.people.join(", ")].filter((line) => line !== "");
   return {
     key: threadId,
-    icon: MAIL_ICON,
+    icon: GMAIL_ICON,
     label: replied
       ? `Gmail: new reply from ${record.lastFrom === "" ? "someone" : record.lastFrom}`
       : `Gmail: ${cut(record.subject)}`,

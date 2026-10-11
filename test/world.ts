@@ -43,12 +43,13 @@ export function world(
   const call = (name: string, args: Record<string, unknown>, scratchpad?: string) => {
     const tool = fake.tools().find((each) => each.name === name);
     if (tool === undefined) throw new Error(`No tool ${name}`);
-    const ctx: ExtensionToolContext & { scratchpad?: string } = {
+    // The api types `scratchpad` as always there; a test without one leaves it out, as an old prifly does.
+    const ctx = {
       session: "s1",
       pick: async () => null,
       signal: new AbortController().signal,
       ...(scratchpad === undefined ? {} : { scratchpad }),
-    };
+    } as ExtensionToolContext;
     return tool.call(args, ctx);
   };
 

@@ -106,7 +106,7 @@ test("a new message in a launched thread turns that session's chip into a warnin
 
   expect(chipOf(w)).toEqual({
     key: "t1",
-    icon: "mail" as never,
+    icon: "gmail",
     label: "Gmail: new reply from Karin Lund",
     tone: "warning",
     details: ["Plans för Tuesday", "Ada Lovelace, Bob", "1 new since the session started"],

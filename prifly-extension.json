@@ -19,7 +19,7 @@
     {
       "id": "thread",
       "label": "From a Gmail thread…",
-      "icon": "mail",
+      "icon": "gmail",
       "description": "Your Gmail, in the columns you choose. The session starts knowing the whole thread: every message, and every attachment saved to disk.",
       "searchPlaceholder": "Gmail search: from:jobylon has:attachment newer_than:7d…"
     }
