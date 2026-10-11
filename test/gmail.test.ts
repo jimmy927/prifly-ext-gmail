@@ -76,6 +76,17 @@ test("search lists thread summaries: last date and sender, first subject", async
         date: "Mon, 5 Oct 2026 10:30:00 +0200",
         from: "Bob <bob@example.com>",
         subject: "Plans för Tuesday",
+        senders: [
+          { name: "Ada Lovelace", address: "ada@example.com" },
+          { name: "Bob", address: "bob@example.com" },
+        ],
+        people: [
+          { name: "Ada Lovelace", address: "ada@example.com" },
+          { name: "Bob", address: "bob@example.com" },
+          { name: "Jimmy", address: "jimmy@example.com" },
+          { name: "", address: "carol@example.com" },
+        ],
+        attachments: 2,
       },
       {
         id: "t2",
@@ -83,6 +94,12 @@ test("search lists thread summaries: last date and sender, first subject", async
         date: "Tue, 6 Oct 2026 08:00:00 +0200",
         from: "Dana <dana@example.com>",
         subject: "Invoice question",
+        senders: [{ name: "Dana", address: "dana@example.com" }],
+        people: [
+          { name: "Dana", address: "dana@example.com" },
+          { name: "", address: "jimmy@example.com" },
+        ],
+        attachments: 0,
       },
     ],
   });

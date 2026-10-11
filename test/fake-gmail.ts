@@ -118,12 +118,25 @@ export type FakeGmail = {
   hits: () => number;
 };
 
+/** Like Gmail's `format=metadata`: the wanted headers, and the MIME parts without their data. */
+function metadataPart(part: Json, wanted: string[]): Json {
+  const { body, parts, headers, ...rest } = part as {
+    body?: Json;
+    parts?: Json[];
+    headers?: { name: string }[];
+  };
+  const kept = (headers ?? []).filter((each) => wanted.includes(each.name));
+  const { data: _data, ...bodyRest } = body ?? {};
+  return {
+    ...rest,
+    headers: kept,
+    body: bodyRest,
+    ...(parts === undefined ? {} : { parts: parts.map((each) => metadataPart(each, wanted)) }),
+  };
+}
+
 function metadataOnly(message: Json, wanted: string[]): Json {
-  const payload = message["payload"] as Json;
-  const kept = (payload["headers"] as { name: string }[]).filter((each) =>
-    wanted.includes(each.name),
-  );
-  return { ...message, payload: { headers: kept } };
+  return { ...message, payload: metadataPart(message["payload"] as Json, wanted) };
 }
 
 export function fakeGmail(): FakeGmail {

@@ -25,7 +25,7 @@ function messageMarkdown(mail: ReadMessage, isDraft: boolean): string {
   return lines.join("\n");
 }
 
-function participants(mails: ReadMessage[]): string {
+export function participants(mails: ReadMessage[]): string {
   const seen = new Set<string>();
   for (const mail of mails) {
     for (const field of [mail.from, mail.to, mail.cc]) {
@@ -82,7 +82,16 @@ export function uniqueName(name: string, taken: Set<string>): string {
   return candidate;
 }
 
-export type Saved = { folder: string; paths: string[]; notSaved: string[] };
+export type SavedFile = { path: string; name: string; mimeType: string; size: number };
+
+export type Saved = {
+  folder: string;
+  /** `thread.md`, then every attachment, in order. */
+  paths: string[];
+  /** The attachments among `paths`, with what Gmail said they are. */
+  files: SavedFile[];
+  notSaved: string[];
+};
 
 /** Writes `thread.md` and every attachment into `folder`; one too big or failing is listed, not saved. */
 export async function saveThread(
@@ -94,7 +103,7 @@ export async function saveThread(
   const taken = new Set<string>(["thread.md"]);
   const markdown = join(folder, "thread.md");
   await writeFile(markdown, threadMarkdown(thread));
-  const saved: Saved = { folder, paths: [markdown], notSaved: [] };
+  const saved: Saved = { folder, paths: [markdown], files: [], notSaved: [] };
   for (const message of thread.messages) {
     for (const each of readMessage(message.payload).attachments) {
       if (each.size > MAX_ATTACHMENT_BYTES) {
@@ -113,6 +122,7 @@ export async function saveThread(
       const path = join(folder, uniqueName(safeFilename(each.filename), taken));
       await writeFile(path, base64urlBytes(got.value));
       saved.paths.push(path);
+      saved.files.push({ path, name: each.filename, mimeType: each.mimeType, size: each.size });
     }
   }
   return saved;

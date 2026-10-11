@@ -15,6 +15,15 @@
       "why": "Searches and reads your mail and writes draft replies. It never sends."
     }
   ],
+  "launch": [
+    {
+      "id": "thread",
+      "label": "From a Gmail thread…",
+      "icon": "mail",
+      "description": "Your Gmail, in the columns you choose. The session starts knowing the whole thread: every message, and every attachment saved to disk.",
+      "searchPlaceholder": "Gmail search: from:jobylon has:attachment newer_than:7d…"
+    }
+  ],
   "settings": [
     {
       "id": "columns",

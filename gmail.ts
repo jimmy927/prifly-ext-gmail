@@ -17,7 +17,7 @@ import {
   parseThread,
   str,
 } from "./gmail-types";
-import { headerValue } from "./mime";
+import { headerValue, type Mailbox, parseAddresses, readMessage } from "./mime";
 
 export const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
 
@@ -41,6 +41,12 @@ export type ThreadSummary = {
   date: string;
   from: string;
   subject: string;
+  /** Everyone who wrote in it, in order of first appearance. */
+  senders: Mailbox[];
+  /** Everyone on it (From, To and Cc), the senders first. */
+  people: Mailbox[];
+  /** The attachments the thread's messages list. */
+  attachments: number;
 };
 
 export type Draft = { id: string; threadId: string };
@@ -78,6 +84,23 @@ function retryWait(response: Response): number {
   return Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, MAX_WAIT_SECONDS) : 1;
 }
 
+/** The mailboxes in the headers called `names` of every message, each address once, in order. */
+function mailboxes(thread: GmailThread, names: string[]): Mailbox[] {
+  const seen = new Set<string>();
+  const out: Mailbox[] = [];
+  for (const name of names) {
+    for (const message of thread.messages) {
+      for (const box of parseAddresses(headerValue(message.payload.headers, name))) {
+        if (!seen.has(box.address.toLowerCase())) {
+          seen.add(box.address.toLowerCase());
+          out.push(box);
+        }
+      }
+    }
+  }
+  return out;
+}
+
 function summarise(id: string, thread: GmailThread): ThreadSummary {
   const first = thread.messages[0];
   const last = thread.messages[thread.messages.length - 1];
@@ -89,6 +112,12 @@ function summarise(id: string, thread: GmailThread): ThreadSummary {
     date: headers(last, "Date"),
     from: headers(last, "From"),
     subject: headers(first, "Subject"),
+    senders: mailboxes(thread, ["From"]),
+    people: mailboxes(thread, ["From", "To", "Cc"]),
+    attachments: thread.messages.reduce(
+      (count, message) => count + readMessage(message.payload).attachments.length,
+      0,
+    ),
   };
 }
 
@@ -140,7 +169,8 @@ export function gmailClient(options: GmailClientOptions): GmailClient {
   /** Each thread's summary, fetched in small parallel chunks. */
   const summaries = async (ids: string[]): Promise<GmailResult<ThreadSummary[]>> => {
     const meta = new URLSearchParams({ format: "metadata" });
-    for (const name of ["From", "Subject", "Date"]) meta.append("metadataHeaders", name);
+    for (const name of ["From", "To", "Cc", "Subject", "Date"])
+      meta.append("metadataHeaders", name);
     const out: ThreadSummary[] = [];
     for (let at = 0; at < ids.length; at += SUMMARY_CHUNK) {
       const chunk = ids.slice(at, at + SUMMARY_CHUNK);
