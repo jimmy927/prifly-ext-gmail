@@ -106,8 +106,7 @@ test("launched records the session, puts the chip on it, and the card is then st
     "session-1": [
       {
         key: "t1",
-        // "mail" is not in v0.1.0 of the api's icon list yet; prifly is adding it.
-        icon: "mail" as never,
+        icon: "gmail",
         label: "Gmail: Plans för Tuesday",
         tone: "info",
         details: ["Plans för Tuesday", "Ada Lovelace, Bob"],

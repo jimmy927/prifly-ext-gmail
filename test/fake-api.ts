@@ -19,6 +19,7 @@ import type {
   ExtensionNeedsSignIn,
   ExtensionPickAnswer,
   ExtensionTool,
+  ExtensionToolContext,
   LauncherFlag,
   SettingValues,
 } from "@prifly/extension-api";
@@ -212,16 +213,18 @@ export function fakeApi(
     start: async () => ({ started: false, reason: "A fake api starts no session." }),
     snooze: () => undefined,
     dialog: async () => null,
+    openUrl: async () => false,
   };
   const callTool: FakeApi["callTool"] = (name, args, pick = null) => {
     const tool = tools.find((each) => each.name === name);
     if (tool === undefined) throw new Error(`No tool ${name} registered`);
-    const ctx = {
+    // No `scratchpad`: a fake session has none, and a tool must not then write into the cwd.
+    const ctx: Omit<ExtensionToolContext, "scratchpad"> = {
       session: "fake-session",
       pick: async () => pick,
       signal: new AbortController().signal,
     };
-    return tool.call(args, ctx);
+    return tool.call(args, ctx as ExtensionToolContext);
   };
   return { api, tools: () => tools, callTool, ...fake };
 }
