@@ -11,6 +11,7 @@
  */
 
 import type {
+  ConfirmSpec,
   Decoration,
   ExtensionApi,
   ExtensionConnection,
@@ -169,6 +170,8 @@ export type FakeApi = {
   flags: Map<string, LauncherFlag | null>;
   notices: { text: string; tone: string | undefined; session: string | undefined }[];
   logs: { event: string; fields: Record<string, unknown> | undefined }[];
+  /** Every `status` line, in order. */
+  statuses: string[];
 };
 
 /** A fake `api`; parts left out of `options` are prifly's quiet defaults. */
@@ -177,6 +180,8 @@ export function fakeApi(
     connections?: ExtensionConnectionsApi;
     settings?: SettingValues;
     folder?: string;
+    /** Answers `api.confirm`; left out, every confirm is a Cancel. */
+    confirm?: (spec: ConfirmSpec) => Promise<boolean>;
   } = {},
 ): FakeApi {
   let tools: ExtensionTool[] = [];
@@ -185,9 +190,12 @@ export function fakeApi(
     flags: new Map(),
     notices: [],
     logs: [],
+    statuses: [],
   };
   const api: ExtensionApi = {
-    features: ["settings", "start-session", "session-lookup"],
+    features: ["settings", "start-session", "session-lookup", "confirm", "status"],
+    confirm: options.confirm ?? (async () => false),
+    status: (text) => void fake.statuses.push(text),
     ...(options.settings === undefined ? {} : { settings: options.settings }),
     ...(options.connections === undefined ? {} : { connections: options.connections }),
     tools: {

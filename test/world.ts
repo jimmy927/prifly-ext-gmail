@@ -1,13 +1,13 @@
 /** A fake prifly with a fake Gmail behind its Google connections, for the tests. */
 
-import type { ExtensionToolContext, SettingValues } from "@prifly/extension-api";
+import type { ConfirmSpec, ExtensionToolContext, SettingValues } from "@prifly/extension-api";
 import { activate } from "../index";
 import { type FakeAccount, fakeApi, fakeConnections } from "./fake-api";
 import { type FakeGmail, fakeGmail, SELF } from "./fake-gmail";
 
-const SCOPES = [
-  "https://www.googleapis.com/auth/gmail.readonly",
-  "https://www.googleapis.com/auth/gmail.compose",
+export const SCOPES = [
+  "https://www.googleapis.com/auth/gmail.modify",
+  "https://www.googleapis.com/auth/gmail.send",
 ];
 
 export const FIRST_ACCOUNT: FakeAccount = {
@@ -24,18 +24,34 @@ export const SECOND_ACCOUNT: FakeAccount = {
   scopes: SCOPES,
 };
 
+/** A confirm card the extension showed, and how many write requests had gone out before it. */
+export type Shown = { spec: ConfirmSpec; writesBefore: number };
+
 export function world(
-  options: { accounts?: FakeAccount[]; settings?: SettingValues; folder?: string } = {},
+  options: {
+    accounts?: FakeAccount[];
+    settings?: SettingValues;
+    folder?: string;
+    /** What the reader answers on every confirm card (default: Confirm). */
+    confirm?: boolean;
+  } = {},
 ) {
   const gmail: FakeGmail = fakeGmail();
   const connections = fakeConnections({
     accounts: options.accounts ?? [FIRST_ACCOUNT],
     provider: gmail.provider,
   });
+  /** The requests that could change the mailbox: everything but GET. */
+  const writes = () => connections.requests.filter((each) => each.method !== "GET");
+  const confirms: Shown[] = [];
   const fake = fakeApi({
     connections: connections.connections,
     ...(options.settings === undefined ? {} : { settings: options.settings }),
     ...(options.folder === undefined ? {} : { folder: options.folder }),
+    confirm: async (spec) => {
+      confirms.push({ spec, writesBefore: writes().length });
+      return options.confirm ?? true;
+    },
   });
   const stop = activate(fake.api);
 
@@ -53,5 +69,5 @@ export function world(
     return tool.call(args, ctx);
   };
 
-  return { gmail, connections, fake, call, stop };
+  return { gmail, connections, fake, call, stop, confirms, writes };
 }

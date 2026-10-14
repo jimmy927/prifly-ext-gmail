@@ -21,10 +21,10 @@ test("a 429 waits the Retry-After seconds once and retries once", async () => {
   const { gmail, client, waits } = setup();
   gmail.throttle.times = 1;
   gmail.throttle.retryAfter = "2";
-  const profile = await client.profile();
-  expect(profile).toEqual({
-    ok: true,
-    value: { emailAddress: FIRST_ACCOUNT.account, historyId: "12" },
+  const profile = await client.request("GET", "/profile");
+  expect(profile.ok && JSON.parse(profile.value)).toEqual({
+    emailAddress: FIRST_ACCOUNT.account,
+    historyId: "12",
   });
   expect(waits).toEqual([2000]);
   expect(gmail.hits()).toBe(2);
@@ -35,7 +35,7 @@ test("the wait is capped at 30 seconds, and a second 503 is an error, not a thir
   gmail.throttle.status = 503;
   gmail.throttle.times = 5;
   gmail.throttle.retryAfter = "999";
-  const profile = await client.profile();
+  const profile = await client.request("GET", "/profile");
   expect(profile).toEqual({
     ok: false,
     kind: "http",
@@ -50,7 +50,7 @@ test("the wait is capped at 30 seconds, and a second 503 is an error, not a thir
 test("a grant the provider ended comes back as needs-sign-in and nothing reaches Gmail", async () => {
   const { gmail, connections, client } = setup();
   connections.endpoint.revoke(FIRST_ACCOUNT.id);
-  expect(await client.profile()).toEqual({
+  expect(await client.request("GET", "/profile")).toEqual({
     ok: false,
     kind: "sign-in",
     account: FIRST_ACCOUNT.account,
@@ -118,9 +118,37 @@ test("drafts are created and updated through /drafts, with the thread id", async
   expect(gmail.drafts.get("r2")?.message).toEqual({ raw: "RAW3" });
 });
 
-test("attachments and history parse tolerantly", async () => {
+test("attachments and labels parse tolerantly", async () => {
   const { client } = setup();
   const attachment = await client.attachment("m1", "att-png");
   expect(attachment.ok && attachment.value.length > 0).toBe(true);
-  expect(await client.history("10")).toEqual({ ok: true, value: { historyId: "12", added: [] } });
+  const labels = await client.labels();
+  expect(labels.ok && labels.value.find((each) => each.id === "Label_1")?.name).toBe("Work");
+  expect(await client.label("INBOX")).toEqual({
+    ok: true,
+    value: { id: "INBOX", name: "INBOX", type: "system", threadsTotal: 2, threadsUnread: 1 },
+  });
+});
+
+test("send, modify and trash reach their Gmail paths with the thread id", async () => {
+  const { gmail, client, connections } = setup();
+  expect(await client.sendMessage("RAW", "t1")).toEqual({
+    ok: true,
+    value: { id: "s1", threadId: "t1" },
+  });
+  expect(gmail.sent).toEqual([{ raw: "RAW", threadId: "t1" }]);
+  expect(await client.modifyThread("t2", ["Label_1"], ["INBOX"])).toEqual({
+    ok: true,
+    value: null,
+  });
+  expect(gmail.threads.get("t2")?.[0]?.["labelIds"]).toEqual(["Label_1"]);
+  expect(await client.trashThread("t1")).toEqual({ ok: true, value: null });
+  expect(gmail.trashed).toEqual(["t1"]);
+  expect(
+    connections.requests.map((each) => `${each.method} ${new URL(each.url).pathname}`),
+  ).toEqual([
+    "POST /gmail/v1/users/me/messages/send",
+    "POST /gmail/v1/users/me/threads/t2/modify",
+    "POST /gmail/v1/users/me/threads/t1/trash",
+  ]);
 });

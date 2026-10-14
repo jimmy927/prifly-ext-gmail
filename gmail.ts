@@ -2,8 +2,9 @@
  * A small Gmail REST client over `api.connections.fetch`: prifly adds the
  * token, so none is kept here. Every method answers a value or a typed
  * failure (the grant ended, or Gmail answered an error status) and never
- * throws for those. There is deliberately no send method. `profile`,
- * `history`, `threadIds` and `sender` are the poller's.
+ * throws for those. The methods that change the mailbox (drafts, send,
+ * labels, modify, trash, `request` with a method other than GET) are only
+ * called by the tools after the reader confirmed.
  */
 
 import type { ExtensionConnectionsApi } from "@prifly/extension-api";
@@ -13,7 +14,6 @@ import {
   type GmailThread,
   isRecord,
   list,
-  parseMessage,
   parseThread,
   str,
 } from "./gmail-types";
@@ -49,24 +49,35 @@ export type ThreadSummary = {
 
 export type Draft = { id: string; threadId: string };
 
-export type HistoryAnswer = {
-  historyId: string;
-  added: { id: string; threadId: string; labelIds: string[] }[];
+export type Sent = { id: string; threadId: string };
+
+export type Label = {
+  id: string;
+  name: string;
+  /** `system` (INBOX, UNREAD, …) or `user`. */
+  type: string;
+  threadsTotal: number;
+  threadsUnread: number;
 };
 
 export type GmailClient = {
-  profile(): Promise<GmailResult<{ emailAddress: string; historyId: string }>>;
   searchThreads(q: string, max: number): Promise<GmailResult<ThreadSummary[]>>;
-  /** Only the ids of the threads a search finds: one request, no metadata calls. */
-  threadIds(q: string, max: number): Promise<GmailResult<string[]>>;
-  /** Who a message is from, as its From header says. */
-  sender(messageId: string): Promise<GmailResult<Mailbox>>;
+  /** The summaries of the threads with these ids, in order. */
+  summaries(ids: string[]): Promise<GmailResult<ThreadSummary[]>>;
   thread(id: string): Promise<GmailResult<GmailThread>>;
   /** The attachment's bytes, base64url. */
   attachment(messageId: string, attachmentId: string): Promise<GmailResult<string>>;
-  history(startHistoryId: string): Promise<GmailResult<HistoryAnswer>>;
+  labels(): Promise<GmailResult<Label[]>>;
+  /** One label with its counts, which the list leaves out. */
+  label(id: string): Promise<GmailResult<Label>>;
   createDraft(raw: string, threadId?: string): Promise<GmailResult<Draft>>;
   updateDraft(draftId: string, raw: string, threadId?: string): Promise<GmailResult<Draft>>;
+  sendMessage(raw: string, threadId?: string): Promise<GmailResult<Sent>>;
+  createLabel(name: string): Promise<GmailResult<Label>>;
+  modifyThread(id: string, add: string[], remove: string[]): Promise<GmailResult<null>>;
+  trashThread(id: string): Promise<GmailResult<null>>;
+  /** Any call below `users/me`: `path` starts with "/" and may carry a query. Answers the body as text. */
+  request(method: string, path: string, body?: unknown): Promise<GmailResult<string>>;
 };
 
 export type GmailClientOptions = {
@@ -119,6 +130,24 @@ function summarise(id: string, thread: GmailThread): ThreadSummary {
   };
 }
 
+const num = (value: unknown): number => (typeof value === "number" ? value : 0);
+
+export function parseLabel(value: unknown): Label {
+  const each = isRecord(value) ? value : {};
+  return {
+    id: str(each["id"]),
+    name: str(each["name"]),
+    type: str(each["type"]),
+    threadsTotal: num(each["threadsTotal"]),
+    threadsUnread: num(each["threadsUnread"]),
+  };
+}
+
+const idPair = (value: unknown): { id: string; threadId: string } => {
+  const data = isRecord(value) ? value : {};
+  return { id: str(data["id"]), threadId: str(data["threadId"]) };
+};
+
 export function gmailClient(options: GmailClientOptions): GmailClient {
   const { connections, connection, account } = options;
   const sleep =
@@ -143,7 +172,8 @@ export function gmailClient(options: GmailClientOptions): GmailClient {
   async function json(path: string, init?: RequestInit): Promise<GmailResult<unknown>> {
     const sent = await send(`${GMAIL_API}${path}`, init);
     if (!sent.ok) return sent;
-    return { ok: true, value: (await sent.value.json()) as unknown };
+    const text = await sent.value.text();
+    return { ok: true, value: text === "" ? {} : (JSON.parse(text) as unknown) };
   }
 
   const body = (method: string, payload: unknown): RequestInit => ({
@@ -163,6 +193,9 @@ export function gmailClient(options: GmailClientOptions): GmailClient {
     const message = isRecord(draft["message"]) ? draft["message"] : {};
     return { ok: true, value: { id: str(draft["id"]), threadId: str(message["threadId"]) } };
   };
+
+  const asNull = (got: GmailResult<unknown>): GmailResult<null> =>
+    got.ok ? { ok: true, value: null } : got;
 
   /** Each thread's summary, fetched in small parallel chunks. */
   const summaries = async (ids: string[]): Promise<GmailResult<ThreadSummary[]>> => {
@@ -194,33 +227,15 @@ export function gmailClient(options: GmailClientOptions): GmailClient {
     message: threadId === undefined || threadId === "" ? { raw } : { raw, threadId },
   });
 
-  return {
-    async profile() {
-      const got = await json("/profile");
-      if (!got.ok) return got;
-      const data = isRecord(got.value) ? got.value : {};
-      return {
-        ok: true,
-        value: { emailAddress: str(data["emailAddress"]), historyId: str(data["historyId"]) },
-      };
-    },
+  const thread = (id: string) => `/threads/${encodeURIComponent(id)}`;
 
+  return {
     async searchThreads(q, max) {
       const ids = await threadIds(q, max);
       return ids.ok ? await summaries(ids.value) : ids;
     },
 
-    threadIds,
-
-    async sender(messageId) {
-      const query = new URLSearchParams({ format: "metadata" });
-      query.append("metadataHeaders", "From");
-      const got = await json(`/messages/${encodeURIComponent(messageId)}?${query}`);
-      if (!got.ok) return got;
-      const message = parseMessage(got.value);
-      const from = parseAddresses(headerValue(message.payload.headers, "From"))[0];
-      return { ok: true, value: from ?? { name: "", address: "" } };
-    },
+    summaries,
 
     thread: (id) => asThread(id, "format=full"),
 
@@ -231,21 +246,16 @@ export function gmailClient(options: GmailClientOptions): GmailClient {
       return { ok: true, value: isRecord(got.value) ? str(got.value["data"]) : "" };
     },
 
-    async history(startHistoryId) {
-      const query = new URLSearchParams({ startHistoryId, historyTypes: "messageAdded" });
-      const got = await json(`/history?${query}`);
+    async labels() {
+      const got = await json("/labels");
       if (!got.ok) return got;
       const data = isRecord(got.value) ? got.value : {};
-      const added = list(data["history"])
-        .flatMap((entry) => (isRecord(entry) ? list(entry["messagesAdded"]) : []))
-        .map((each) => parseMessage(isRecord(each) ? each["message"] : undefined));
-      return {
-        ok: true,
-        value: {
-          historyId: str(data["historyId"]),
-          added: added.map(({ id, threadId, labelIds }) => ({ id, threadId, labelIds })),
-        },
-      };
+      return { ok: true, value: list(data["labels"]).map(parseLabel) };
+    },
+
+    async label(id) {
+      const got = await json(`/labels/${encodeURIComponent(id)}`);
+      return got.ok ? { ok: true, value: parseLabel(got.value) } : got;
     },
 
     async createDraft(raw, threadId) {
@@ -255,6 +265,33 @@ export function gmailClient(options: GmailClientOptions): GmailClient {
     async updateDraft(draftId, raw, threadId) {
       const path = `/drafts/${encodeURIComponent(draftId)}`;
       return asDraft(await json(path, body("PUT", draftBody(raw, threadId))));
+    },
+
+    async sendMessage(raw, threadId) {
+      const payload = threadId === undefined || threadId === "" ? { raw } : { raw, threadId };
+      const got = await json("/messages/send", body("POST", payload));
+      return got.ok ? { ok: true, value: idPair(got.value) } : got;
+    },
+
+    async createLabel(name) {
+      const payload = { name, labelListVisibility: "labelShow", messageListVisibility: "show" };
+      const got = await json("/labels", body("POST", payload));
+      return got.ok ? { ok: true, value: parseLabel(got.value) } : got;
+    },
+
+    async modifyThread(id, add, remove) {
+      const payload = { addLabelIds: add, removeLabelIds: remove };
+      return asNull(await json(`${thread(id)}/modify`, body("POST", payload)));
+    },
+
+    async trashThread(id) {
+      return asNull(await json(`${thread(id)}/trash`, { method: "POST" }));
+    },
+
+    async request(method, path, payload) {
+      const init: RequestInit = payload === undefined ? { method } : body(method, payload);
+      const sent = await send(`${GMAIL_API}${path}`, init);
+      return sent.ok ? { ok: true, value: await sent.value.text() } : sent;
     },
   };
 }

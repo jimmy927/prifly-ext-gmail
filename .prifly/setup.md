@@ -11,5 +11,5 @@ with `import type`. The gate is `bun test`, `bun run typecheck` (`tsc --noEmit`)
 What it relies on outside the worktree:
 - `bun` on PATH.
 - SSH access to GitHub: `@prifly/extension-api` comes from
-  `git+ssh://git@github.com/jimmy927/prifly-extension-api.git#v0.1.0`, a private repository, so
+  `git+ssh://git@github.com/jimmy927/prifly-extension-api.git#v0.6.0`, a private repository, so
   the install needs a key that works for `git@github.com`.

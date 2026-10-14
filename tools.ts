@@ -1,61 +1,20 @@
 /**
- * The four MCP tools every session sees as `mcp__prifly__gmail_*`. They
- * search, read and write drafts; nothing here sends, and no URL they reach
- * ends in `/send`. A failure comes back as text, not as a throw.
+ * Every MCP tool the extension serves, as `mcp__prifly__gmail_*`, and the
+ * ones that only read: search, a whole thread with its attachments saved,
+ * and the labels. Reads run at once; every tool that changes the mailbox
+ * (`compose-tools.ts`, `change-tools.ts`, `api-tools.ts`) waits for the
+ * reader's confirm first. A failure comes back as text, not as a throw.
  */
 
 import { join } from "node:path";
 import type { ExtensionApi, ExtensionTool, ExtensionToolContext } from "@prifly/extension-api";
-import { NO_CONNECTION, pickConnection } from "./connection";
-import { failureText, type GmailClient, gmailClient, type ThreadSummary } from "./gmail";
-import { buildNew, buildReply, readMessage } from "./mime";
+import { type ApiToolsOptions, apiDocsTool, apiTool } from "./api-tools";
+import { changeTools } from "./change-tools";
+import { composeTools } from "./compose-tools";
+import { failureText, type ThreadSummary } from "./gmail";
 import { safeFilename, saveThread, threadMarkdown } from "./save";
-
-/** prifly is adding `scratchpad` (an absolute folder) to the context; v0.1.0 does not have it. */
-type ToolContext = ExtensionToolContext & { scratchpad?: string };
-
-type Args = Record<string, unknown>;
-
-const NOTHING_SENT = "Nothing is ever sent: the reader sends each mail themselves.";
-
-const ACCOUNT_PROPERTY = {
-  type: "string",
-  description:
-    "The Google account's email, when several are connected. Left out: the Gmail setting's account, else the first connected one.",
-};
-
-function text(args: Args, key: string): string {
-  const value = args[key];
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function schema(properties: Record<string, unknown>, required: string[]): Record<string, unknown> {
-  return {
-    type: "object",
-    properties: { ...properties, account: ACCOUNT_PROPERTY },
-    required,
-    additionalProperties: false,
-  };
-}
-
-type Session = { client: GmailClient; account: string };
-
-/** Runs `run` with a client for the right account, or answers why there is none. */
-async function withGmail(
-  api: ExtensionApi | null,
-  args: Args,
-  run: (session: Session) => Promise<string>,
-): Promise<string> {
-  const given = text(args, "account");
-  const connection = api === null ? null : pickConnection(api, given === "" ? undefined : given);
-  if (api?.connections === undefined || connection === null) return NO_CONNECTION;
-  const client = gmailClient({
-    connections: api.connections,
-    connection: connection.id,
-    account: connection.account,
-  });
-  return await run({ client, account: connection.account });
-}
+import { signInTool } from "./sign-in";
+import { type Args, schema, text, withGmail } from "./tool-kit";
 
 function searchLine(each: ThreadSummary): string {
   return `${each.id} | ${each.messages} msg | ${each.date.slice(0, 31)} | ${each.from.slice(0, 40)} | ${each.subject}`;
@@ -65,7 +24,7 @@ function searchTool(getApi: () => ExtensionApi | null): ExtensionTool {
   return {
     name: "gmail_search",
     description:
-      "Searches the reader's Gmail with a Gmail query (for example `is:unread in:inbox`, `from:ada newer_than:2d`). Answers one line per thread: thread_id | messages | date | from | subject. Read-only: nothing is ever sent.",
+      "Searches the reader's Gmail with a Gmail query (for example `is:unread in:inbox`, `from:ada newer_than:2d`). Answers one line per thread: thread_id | messages | date | from | subject. Read-only.",
     inputSchema: schema(
       {
         query: { type: "string", description: "A Gmail search query." },
@@ -87,6 +46,15 @@ function searchTool(getApi: () => ExtensionApi | null): ExtensionTool {
   };
 }
 
+/** The session's scratchpad, or undefined where prifly cannot give one (reading it may throw). */
+function scratchpadOf(ctx: ExtensionToolContext): string | undefined {
+  try {
+    return (ctx as { scratchpad?: string }).scratchpad;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Where a thread is saved: the session's scratchpad, else the extension's folder; null with neither. */
 function threadFolder(
   scratchpad: string | undefined,
@@ -105,17 +73,17 @@ function threadTool(getApi: () => ExtensionApi | null): ExtensionTool {
   return {
     name: "gmail_thread",
     description:
-      "Reads a whole Gmail thread: every message with from, to, cc, date and text, oldest first. The thread and its attachments are also saved as files, whose paths are listed. Read-only: nothing is ever sent.",
+      "Reads a whole Gmail thread: every message with from, to, cc, date and text, oldest first. The thread and its attachments are also saved as files, whose paths are listed. Read-only.",
     inputSchema: schema({ thread_id: { type: "string", description: "From gmail_search." } }, [
       "thread_id",
     ]),
-    call: (args, ctx: ToolContext) =>
-      withGmail(getApi(), args, async ({ client }) => {
+    call: (args: Args, ctx) =>
+      withGmail(getApi(), args, async ({ api, client }) => {
         const id = text(args, "thread_id");
         if (id === "") return "thread_id is required.";
         const got = await client.thread(id);
         if (!got.ok) return failureText(got);
-        const folder = threadFolder(ctx.scratchpad, getApi()?.folder, id);
+        const folder = threadFolder(scratchpadOf(ctx), api.folder, id);
         if (folder === null) {
           return `${threadMarkdown(got.value)}\n---\nNothing was saved: this session has no scratchpad and the extension has no folder.`;
         }
@@ -130,78 +98,39 @@ function threadTool(getApi: () => ExtensionApi | null): ExtensionTool {
   };
 }
 
-function draftReplyTool(getApi: () => ExtensionApi | null): ExtensionTool {
+function labelsTool(getApi: () => ExtensionApi | null): ExtensionTool {
   return {
-    name: "gmail_draft_reply",
-    description: `Writes a draft reply inside a Gmail thread, threaded under its last message; \`all\` (default true) also keeps everyone else on Cc. Pass replace_draft_id to change an earlier draft instead of adding a second. ${NOTHING_SENT}`,
-    inputSchema: schema(
-      {
-        thread_id: { type: "string" },
-        body: { type: "string", description: "The reply's plain text." },
-        all: { type: "boolean", description: "Reply to everyone (default true)." },
-        replace_draft_id: { type: "string", description: "A draft to rewrite in place." },
-      },
-      ["thread_id", "body"],
-    ),
-    call: (args) =>
-      withGmail(getApi(), args, ({ client, account }) => replyDraft(client, account, args)),
-  };
-}
-
-async function replyDraft(client: GmailClient, account: string, args: Args): Promise<string> {
-  const id = text(args, "thread_id");
-  const body = typeof args["body"] === "string" ? args["body"] : "";
-  if (id === "" || body.trim() === "") return "thread_id and body are required.";
-  const got = await client.thread(id);
-  if (!got.ok) return failureText(got);
-  const raw = buildReply({
-    messages: got.value.messages,
-    self: account,
-    body,
-    all: args["all"] !== false,
-  });
-  if (raw === null) return "The thread has no sent message to reply to.";
-  const replace = text(args, "replace_draft_id");
-  const made =
-    replace === "" ? await client.createDraft(raw, id) : await client.updateDraft(replace, raw, id);
-  if (!made.ok) return failureText(made);
-  const first = got.value.messages[0];
-  const subject = first === undefined ? "" : readMessage(first.payload).subject;
-  return `Draft ${made.value.id} is in the thread “${subject}” in Gmail: open the thread to see it under the last message.`;
-}
-
-function newDraftTool(getApi: () => ExtensionApi | null): ExtensionTool {
-  return {
-    name: "gmail_new_draft",
-    description: `Writes a new draft mail (not a reply) in Gmail's Drafts. ${NOTHING_SENT}`,
-    inputSchema: schema(
-      {
-        to: { type: "string", description: "Addresses, separated by commas." },
-        cc: { type: "string" },
-        subject: { type: "string" },
-        body: { type: "string", description: "Plain text." },
-      },
-      ["to", "subject", "body"],
-    ),
+    name: "gmail_labels",
+    description:
+      "Lists the reader's Gmail labels, one per line: id | name | system or user. Read-only.",
+    inputSchema: schema({}, []),
     call: (args) =>
       withGmail(getApi(), args, async ({ client }) => {
-        const to = text(args, "to");
-        const body = typeof args["body"] === "string" ? args["body"] : "";
-        if (to === "" || body.trim() === "") return "to and body are required.";
-        const cc = text(args, "cc");
-        const raw = buildNew({
-          to,
-          cc: cc === "" ? undefined : cc,
-          subject: text(args, "subject"),
-          body,
-        });
-        const made = await client.createDraft(raw);
-        if (!made.ok) return failureText(made);
-        return `Draft ${made.value.id} is in Gmail's Drafts: open Drafts to see it. Nothing was sent.`;
+        const got = await client.labels();
+        if (!got.ok) return failureText(got);
+        if (got.value.length === 0) return "No labels.";
+        return got.value.map((each) => `${each.id} | ${each.name} | ${each.type}`).join("\n");
       }),
   };
 }
 
-export function gmailTools(getApi: () => ExtensionApi | null): ExtensionTool[] {
-  return [searchTool(getApi), threadTool(getApi), draftReplyTool(getApi), newDraftTool(getApi)];
+export type ToolsOptions = ApiToolsOptions & {
+  /** Called after `gmail_sign_in`, to read the status line again. */
+  onSignedIn?: () => void;
+};
+
+export function gmailTools(
+  getApi: () => ExtensionApi | null,
+  options: ToolsOptions = {},
+): ExtensionTool[] {
+  return [
+    searchTool(getApi),
+    threadTool(getApi),
+    labelsTool(getApi),
+    ...composeTools(getApi),
+    ...changeTools(getApi),
+    apiTool(getApi),
+    apiDocsTool(options),
+    signInTool(getApi, options.onSignedIn),
+  ];
 }

@@ -1,6 +1,7 @@
 /**
  * Pure functions over Gmail's message payloads and RFC 822: read a message
- * into text and attachments, and build the raw text of a reply or a new mail.
+ * into text and attachments, and build the raw text of a reply, a new mail or
+ * a forward, with files attached when there are any.
  */
 
 import type { GmailMessage, Header, Part } from "./gmail-types";
@@ -189,21 +190,64 @@ function wrap76(text: string): string {
   return text.replace(/.{1,76}/g, "$&\r\n").trimEnd();
 }
 
-function assemble(headers: [string, string][], body: string): string {
+/** A file that travels in an outgoing mail. */
+export type FileAttachment = { filename: string; mimeType: string; bytes: Uint8Array };
+
+const base64Lines = (bytes: Uint8Array): string => wrap76(Buffer.from(bytes).toString("base64"));
+
+const textBytes = (body: string): Uint8Array =>
+  new Uint8Array(Buffer.from(body.replace(/\r?\n/g, "\r\n"), "utf8"));
+
+/** `filename="x.pdf"` for a plain name, else the RFC 2231 form that carries any character. */
+function fileParameter(name: string, filename: string): string {
+  const clean = filename.replace(/[\r\n]+/g, " ");
+  return isAscii(clean) && !/["\\]/.test(clean)
+    ? `${name}="${clean}"`
+    : `${name}*=UTF-8''${encodeURIComponent(clean)}`;
+}
+
+function attachmentPart(file: FileAttachment): string[] {
+  const type = /^[\w.+-]+\/[\w.+-]+$/.test(file.mimeType)
+    ? file.mimeType
+    : "application/octet-stream";
+  return [
+    `Content-Type: ${type}; ${fileParameter("name", file.filename)}`,
+    `Content-Disposition: attachment; ${fileParameter("filename", file.filename)}`,
+    "Content-Transfer-Encoding: base64",
+    "",
+    base64Lines(file.bytes),
+  ];
+}
+
+/** The lines after the headers: plain text alone, or multipart/mixed with the files. */
+function bodyLines(body: string, attachments: FileAttachment[]): string[] {
+  const text = [
+    "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    base64Lines(textBytes(body)),
+  ];
+  if (attachments.length === 0) return text;
+  const boundary = `prifly-${crypto.randomUUID()}`;
+  return [
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    "",
+    ...[text, ...attachments.map(attachmentPart)].flatMap((part) => [`--${boundary}`, ...part]),
+    `--${boundary}--`,
+  ];
+}
+
+function assemble(
+  headers: [string, string][],
+  body: string,
+  attachments: FileAttachment[] = [],
+): string {
   const lines = headers
     .filter(([, value]) => value !== "")
     // A line break stays only as a fold (CRLF + space), so a value cannot start a new header.
     .map(([name, value]) => `${name}: ${value.replace(/\r\n(?![ \t])|\r(?!\n)|(?<!\r)\n/g, " ")}`);
-  const encoded = wrap76(Buffer.from(body.replace(/\r?\n/g, "\r\n"), "utf8").toString("base64"));
   return encodeBase64url(
-    [
-      ...lines,
-      "MIME-Version: 1.0",
-      "Content-Type: text/plain; charset=UTF-8",
-      "Content-Transfer-Encoding: base64",
-      "",
-      encoded,
-    ].join("\r\n"),
+    [...lines, "MIME-Version: 1.0", ...bodyLines(body, attachments)].join("\r\n"),
   );
 }
 
@@ -226,8 +270,17 @@ export function replySubject(subject: string): string {
   return /^re:/i.test(subject.trim()) ? subject.trim() : `Re: ${subject.trim()}`.trim();
 }
 
-/** The raw (base64url RFC 822) reply to the thread's last sent message, or null with no message. */
-export function buildReply(input: ReplyInput): string | null {
+/** Who a reply goes to, its subject and its threading headers: what a confirm card shows. */
+export type ReplyEnvelope = {
+  to: string;
+  cc: string;
+  subject: string;
+  inReplyTo: string;
+  references: string;
+};
+
+/** The envelope of a reply to the thread's last sent message, or null with no message. */
+export function replyEnvelope(input: Omit<ReplyInput, "body">): ReplyEnvelope | null {
   const last = lastSent(input.messages);
   if (last === null) return null;
   const mail = readMessage(last.payload);
@@ -240,34 +293,83 @@ export function buildReply(input: ReplyInput): string | null {
         (box) => !to.some((each) => sameAddress(each.address, box.address)),
       )
     : [];
-  const references = `${mail.references} ${mail.messageId}`.trim();
+  return {
+    to: formatList(to),
+    cc: formatList(cc),
+    subject: replySubject(mail.subject),
+    inReplyTo: mail.messageId,
+    references: mail.messageId === "" ? "" : `${mail.references} ${mail.messageId}`.trim(),
+  };
+}
+
+/** The raw (base64url RFC 822) text of a reply with this envelope. */
+export function rawReply(
+  envelope: ReplyEnvelope,
+  body: string,
+  attachments: FileAttachment[] = [],
+): string {
   return assemble(
     [
-      ["To", formatList(to)],
-      ["Cc", formatList(cc)],
-      ["Subject", encodeHeaderText(replySubject(mail.subject))],
-      ["In-Reply-To", mail.messageId],
-      ["References", mail.messageId === "" ? "" : references],
+      ["To", envelope.to],
+      ["Cc", envelope.cc],
+      ["Subject", encodeHeaderText(envelope.subject)],
+      ["In-Reply-To", envelope.inReplyTo],
+      ["References", envelope.references],
     ],
-    input.body,
+    body,
+    attachments,
   );
 }
 
-export type NewMail = { to: string; cc?: string | undefined; subject: string; body: string };
+/** The raw (base64url RFC 822) reply to the thread's last sent message, or null with no message. */
+export function buildReply(input: ReplyInput): string | null {
+  const envelope = replyEnvelope(input);
+  return envelope === null ? null : rawReply(envelope, input.body);
+}
 
-function listOrRaw(value: string): string {
+export type NewMail = {
+  to: string;
+  cc?: string | undefined;
+  bcc?: string | undefined;
+  subject: string;
+  body: string;
+};
+
+/** An address list as it goes in a header: parsed and formatted, else as given. */
+export function listOrRaw(value: string): string {
   const boxes = parseAddresses(value);
   return boxes.length > 0 ? formatList(boxes) : value.trim();
 }
 
 /** The raw (base64url RFC 822) text of a new mail. */
-export function buildNew(mail: NewMail): string {
+export function buildNew(mail: NewMail, attachments: FileAttachment[] = []): string {
   return assemble(
     [
       ["To", listOrRaw(mail.to)],
       ["Cc", listOrRaw(mail.cc ?? "")],
+      ["Bcc", listOrRaw(mail.bcc ?? "")],
       ["Subject", encodeHeaderText(mail.subject)],
     ],
     mail.body,
+    attachments,
   );
+}
+
+export function forwardSubject(subject: string): string {
+  return /^fwd?:/i.test(subject.trim()) ? subject.trim() : `Fwd: ${subject.trim()}`.trim();
+}
+
+/** The note, then the forwarded message's headers and text, the way Gmail's Forward writes it. */
+export function forwardBody(note: string, message: GmailMessage): string {
+  const mail = readMessage(message.payload);
+  const lines = [
+    "---------- Forwarded message ---------",
+    `From: ${mail.from}`,
+    `Date: ${mail.date}`,
+    `Subject: ${mail.subject}`,
+    `To: ${mail.to}`,
+  ];
+  if (mail.cc !== "") lines.push(`Cc: ${mail.cc}`);
+  const quoted = [...lines, "", mail.text].join("\n");
+  return note.trim() === "" ? quoted : `${note.trimEnd()}\n\n${quoted}`;
 }

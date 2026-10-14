@@ -175,6 +175,16 @@ test("with no account connected every tool says to connect one", async () => {
   expect(await w.call("gmail_thread", { thread_id: "t1" })).toBe(text);
   expect(await w.call("gmail_draft_reply", { thread_id: "t1", body: "x" })).toBe(text);
   expect(await w.call("gmail_new_draft", { to: "a@b.c", subject: "s", body: "x" })).toBe(text);
+  expect(await w.call("gmail_send", { to: "a@b.c", subject: "s", body: "x" })).toBe(text);
+  expect(await w.call("gmail_trash", { thread_ids: ["t1"] })).toBe(text);
+  expect(await w.call("gmail_api", { path: "/profile" })).toBe(text);
+});
+
+test("gmail_labels lists every label with its kind", async () => {
+  const w = started();
+  const answer = await w.call("gmail_labels", {});
+  expect(answer).toContain("INBOX | INBOX | system");
+  expect(answer).toContain("Label_1 | Work | user");
 });
 
 test("a revoked grant gives the sign-in text, not an error", async () => {
@@ -201,9 +211,10 @@ test("the account setting picks the second of two accounts; an account argument 
     settings: { account: "Second@Example.com" },
   });
   await w.call("gmail_search", { query: "" });
-  expect(new Set(w.connections.requests.map((each) => each.headers.get("Authorization")))).toEqual(
-    new Set(["Bearer token-g-2-1", "Bearer token-g-2-2", "Bearer token-g-2-3"]),
-  );
+  // The status line's reads count too: they use the setting's account as well.
+  const tokens = w.connections.requests.map((each) => each.headers.get("Authorization"));
+  expect(tokens.length).toBeGreaterThanOrEqual(3);
+  expect(tokens.every((each) => each?.startsWith("Bearer token-g-2-"))).toBe(true);
   const before = w.connections.requests.length;
   await w.call("gmail_search", { query: "", account: "first@example.com" });
   const used = w.connections.requests
@@ -224,7 +235,7 @@ test("an empty account setting uses the first connected account", async () => {
   expect(w.connections.requests[0]?.headers.get("Authorization")).toStartWith("Bearer token-g-2-");
 });
 
-test("guard: no tool ever sends a request to a /send URL, and every call is a read or a draft", async () => {
+test("the read and draft tools never reach a /send URL: every call is a read or a draft", async () => {
   const w = started();
   await w.call("gmail_search", { query: "" });
   await w.call("gmail_thread", { thread_id: "t1" }, temp);

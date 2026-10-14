@@ -13,7 +13,11 @@ export function signInText(account: string): string {
 }
 
 export function httpText(status: number, account: string, body: string): string {
-  return `Gmail answered ${status} for ${account}: ${body.slice(0, 300)}`;
+  const said = `Gmail answered ${status} for ${account}: ${body.slice(0, 300)}`;
+  // A grant from before sending and labelling was added: approving the scopes again fixes it.
+  return status === 403 && /insufficient.*scope/i.test(body)
+    ? `${said}\nThe Google grant for ${account} only allows reading and drafting: run gmail_sign_in so the reader approves sending and labelling, then try again.`
+    : said;
 }
 
 /** The connected account to use: `account` argument, else the `account` setting, else the first. */

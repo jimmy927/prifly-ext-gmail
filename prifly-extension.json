@@ -1,46 +1,21 @@
 {
   "id": "gmail",
   "name": "Gmail",
-  "description": "Search, read and draft replies in Gmail from any session, through your Google account. It never sends.",
-  "version": "0.1.0",
+  "description": "Search, read, draft, send, label, archive and trash Gmail from any session, through your Google account. Every change waits for your confirm.",
+  "version": "0.2.0",
   "main": "index.ts",
   "prompt": "prompt.md",
   "connections": [
     {
       "provider": "google",
       "scopes": [
-        "https://www.googleapis.com/auth/gmail.readonly",
-        "https://www.googleapis.com/auth/gmail.compose"
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.send"
       ],
-      "why": "Searches and reads your mail and writes draft replies. It never sends."
-    }
-  ],
-  "launch": [
-    {
-      "id": "thread",
-      "label": "From a Gmail thread…",
-      "icon": "gmail",
-      "description": "Your Gmail, in the columns you choose. The session starts knowing the whole thread: every message, and every attachment saved to disk.",
-      "searchPlaceholder": "Gmail search: from:jobylon has:attachment newer_than:7d…"
+      "why": "Reads, drafts, sends, labels, archives and trashes your mail, each change only after you confirm it on a card."
     }
   ],
   "settings": [
-    {
-      "id": "columns",
-      "label": "Columns",
-      "description": "Gmail searches, as Name=Gmail search pairs separated by ;",
-      "type": "string",
-      "default": "Unread=is:unread in:inbox; Inbox=in:inbox; Starred=is:starred"
-    },
-    {
-      "id": "pollSeconds",
-      "label": "Check for new mail every (seconds)",
-      "description": "How often to check for new mail (the unread count on the launcher button and a new reply on a session's Gmail chip). An opened board is also kept this long before Gmail is asked again.",
-      "type": "number",
-      "default": 90,
-      "min": 30,
-      "max": 900
-    },
     {
       "id": "account",
       "label": "Google account",

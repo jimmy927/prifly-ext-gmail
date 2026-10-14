@@ -1,59 +1,26 @@
 /**
  * The Gmail extension: what prifly imports. `activate` is given the api,
- * registers the four MCP tools that search, read and draft Gmail through the
- * reader's Google connection, puts back the chips of the sessions started
- * from a thread and starts the poller (`poll.ts`). `choices`, `open`, `launch`
- * and `launched` are the launcher "From a Gmail thread…" (`launcher.ts`). Types come from
- * `@prifly/extension-api` with `import type`, so nothing of it is loaded at
- * run time.
+ * registers the Gmail tools every session can use (`tools.ts`) and keeps the
+ * one status line current (`status.ts`). There is nothing else to see: no
+ * launcher, no chips. Types come from `@prifly/extension-api` with
+ * `import type`, so nothing of it is loaded at run time.
  */
 
-import type {
-  ExtensionApi,
-  Launch,
-  LaunchBoard,
-  LaunchChoice,
-  LaunchItem,
-} from "@prifly/extension-api";
-import * as launcher from "./launcher";
-import { startPoller } from "./poll";
-import { readState } from "./state";
+import type { ExtensionApi } from "@prifly/extension-api";
+import { startStatus } from "./status";
 import { gmailTools } from "./tools";
 
 let api: ExtensionApi | null = null;
 
 export function activate(given: ExtensionApi): () => void {
   api = given;
+  const status = startStatus(given);
   // Absent on an older prifly: optional, like every part added after the first version.
-  given.tools?.register(gmailTools(() => api));
-  void readState(given.folder).then((state) => {
-    if (api === given) launcher.showChips(given, state);
-  });
-  const stopPoller = startPoller(given);
+  given.tools?.register(gmailTools(() => api, { onSignedIn: status.refresh }));
+  given.onSettings?.(() => status.refresh());
   given.log("activated");
   return () => {
-    stopPoller();
+    status.stop();
     api = null;
   };
-}
-
-export async function choices(
-  _launchId: string,
-  query: string,
-): Promise<LaunchChoice[] | LaunchBoard> {
-  return api === null ? [] : await launcher.choices(api, query);
-}
-
-export async function open(_launchId: string, key: string): Promise<LaunchItem> {
-  if (api === null) return { title: "Gmail", markdown: "Gmail is not running." };
-  return await launcher.open(api, key);
-}
-
-export async function launch(_launchId: string, key: string): Promise<Launch> {
-  if (api === null) return { prompt: "", message: "Gmail is not running." };
-  return await launcher.launch(api, key);
-}
-
-export async function launched(_launchId: string, key: string, sessionId: string): Promise<void> {
-  if (api !== null) await launcher.launched(api, key, sessionId);
 }
