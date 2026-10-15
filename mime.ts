@@ -1,7 +1,8 @@
 /**
  * Pure functions over Gmail's message payloads and RFC 822: read a message
  * into text and attachments, and build the raw text of a reply, a new mail or
- * a forward, with files attached when there are any.
+ * a forward, with files attached and pictures shown inline when there are
+ * any; and check a saved copy of a mail for parts Gmail lost.
  */
 
 import type { GmailMessage, Header, Part } from "./gmail-types";
