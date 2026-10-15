@@ -5,10 +5,8 @@
  * on a confirm card, and only then writes.
  */
 
-import { readFile } from "node:fs/promises";
-import { basename, extname, isAbsolute } from "node:path";
 import type { ExtensionApi, ExtensionTool } from "@prifly/extension-api";
-import { failureText, type GmailClient } from "./gmail";
+import { failureText, type GmailClient, type GmailResult, type Sent } from "./gmail";
 import type { GmailMessage } from "./gmail-types";
 import {
   base64urlBytes,
@@ -24,96 +22,25 @@ import {
   replyEnvelope,
 } from "./mime";
 import {
+  ATTACHMENTS_PROPERTY,
+  brokenCopy,
+  extrasText,
+  filesFor,
+  HTML_PROPERTY,
+  INLINE_IMAGES_PROPERTY,
+  type MailContent,
+  mailContent,
+  mailDetails,
+} from "./outgoing";
+import {
   type Args,
   confirmFirst,
   type Session,
   schema,
-  strings,
   text,
   untrimmed,
   withGmail,
 } from "./tool-kit";
-
-/** Gmail's own limit for what a mail carries. */
-const MAX_ATTACHED_BYTES = 25 * 1024 * 1024;
-
-const TYPES: Record<string, string> = {
-  ".pdf": "application/pdf",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".txt": "text/plain",
-  ".md": "text/markdown",
-  ".csv": "text/csv",
-  ".html": "text/html",
-  ".json": "application/json",
-  ".zip": "application/zip",
-  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-};
-
-const ATTACHMENTS_PROPERTY = {
-  type: "array",
-  items: { type: "string" },
-  description: "Absolute paths of local files to attach.",
-};
-
-function size(bytes: number): string {
-  return bytes >= 1024 * 1024
-    ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
-    : `${Math.ceil(bytes / 1024)} KB`;
-}
-
-/** The local files to attach, read now, or why they cannot be. */
-async function localFiles(paths: string[]): Promise<FileAttachment[] | string> {
-  const files: FileAttachment[] = [];
-  for (const path of paths) {
-    if (!isAbsolute(path)) return `Not done: ${path} is not an absolute path.`;
-    try {
-      const bytes = new Uint8Array(await readFile(path));
-      const mimeType = TYPES[extname(path).toLowerCase()] ?? "application/octet-stream";
-      files.push({ filename: basename(path), mimeType, bytes });
-    } catch (error) {
-      return `Not done: cannot read ${path}: ${error instanceof Error ? error.message : String(error)}`;
-    }
-  }
-  return files;
-}
-
-function tooBig(files: FileAttachment[]): string | null {
-  const total = files.reduce((sum, each) => sum + each.bytes.length, 0);
-  return total > MAX_ATTACHED_BYTES
-    ? `Not done: the attachments come to ${size(total)}, over Gmail's 25 MB.`
-    : null;
-}
-
-/** `more` and the local files `attachments` names, read now, or why they cannot go. */
-async function filesFor(
-  args: Args,
-  more: FileAttachment[] = [],
-): Promise<FileAttachment[] | string> {
-  const local = await localFiles(strings(args, "attachments"));
-  if (typeof local === "string") return local;
-  const files = [...more, ...local];
-  return tooBig(files) ?? files;
-}
-
-/** What a confirm card shows of a mail: its headers, its files, then its text as written. */
-function mailDetails(headers: [string, string][], files: FileAttachment[], body: string): string {
-  const lines = headers
-    .filter(([, value]) => value !== "")
-    .map(([name, value]) => `${name}: ${value}`);
-  if (files.length > 0) {
-    lines.push(
-      "Attachments:",
-      ...files.map((each) => `- ${each.filename} (${size(each.bytes.length)})`),
-    );
-  }
-  return [...lines, "", body].join("\n");
-}
 
 const envelopeHeaders = (envelope: ReplyEnvelope): [string, string][] => [
   ["To", envelope.to],
@@ -142,11 +69,14 @@ function draftReplyTool(getApi: () => ExtensionApi | null): ExtensionTool {
   return {
     name: "gmail_draft_reply",
     description:
-      "Writes a draft reply inside a Gmail thread, threaded under its last message; `all` (default true) also keeps everyone else on Cc. Pass replace_draft_id to change an earlier draft instead of adding a second. The reader confirms on a card first; nothing is sent.",
+      "Writes a draft reply inside a Gmail thread, threaded under its last message; `all` (default true) also keeps everyone else on Cc. Local files can be attached and pictures shown inline (inline_images, each at an [image:name] line of the body); such a draft survives being opened and sent from Gmail's web editor. Pass replace_draft_id to change an earlier draft instead of adding a second. The reader confirms on a card first; nothing is sent.",
     inputSchema: schema(
       {
         thread_id: { type: "string" },
         body: { type: "string", description: "The reply's plain text." },
+        html: HTML_PROPERTY,
+        inline_images: INLINE_IMAGES_PROPERTY,
+        attachments: ATTACHMENTS_PROPERTY,
         all: { type: "boolean", description: "Reply to everyone (default true)." },
         replace_draft_id: { type: "string", description: "A draft to rewrite in place." },
       },
@@ -160,19 +90,29 @@ async function draftReply(args: Args, { api, client, account }: Session): Promis
   const id = text(args, "thread_id");
   const body = untrimmed(args, "body");
   if (id === "" || body.trim() === "") return "thread_id and body are required.";
+  const content = await mailContent(args, body);
+  if (typeof content === "string") return content;
   const plan = await planReply(client, account, id, args["all"] !== false);
   if (typeof plan === "string") return plan;
   const replace = text(args, "replace_draft_id");
   const refused = await confirmFirst(api, {
     title: replace === "" ? "Write a draft reply" : "Rewrite a draft reply",
-    summary: `Draft a reply to “${plan.subject}” for ${plan.envelope.to}, in the thread. Nothing is sent.`,
-    details: mailDetails(envelopeHeaders(plan.envelope), [], body),
+    summary: `Draft a reply to “${plan.subject}” for ${plan.envelope.to}, in the thread${extrasText(content)}. Nothing is sent.`,
+    details: mailDetails(envelopeHeaders(plan.envelope), content, body),
   });
   if (refused !== null) return refused;
-  const raw = rawReply(plan.envelope, body);
+  const raw = rawReply(plan.envelope, content.text, content.files, content.rich);
   const made =
     replace === "" ? await client.createDraft(raw, id) : await client.updateDraft(replace, raw, id);
   if (!made.ok) return failureText(made);
+  const broken = await brokenCopy(
+    client,
+    "Saved",
+    `draft ${made.value.id}`,
+    made.value.messageId,
+    content,
+  );
+  if (broken !== null) return broken;
   return `Draft ${made.value.id} is in the thread “${plan.subject}” in Gmail: open the thread to see it under the last message.`;
 }
 
@@ -180,33 +120,42 @@ function newDraftTool(getApi: () => ExtensionApi | null): ExtensionTool {
   return {
     name: "gmail_new_draft",
     description:
-      "Writes a new draft mail (not a reply) in Gmail's Drafts. The reader confirms on a card first; nothing is sent.",
+      "Writes a new draft mail (not a reply) in Gmail's Drafts. Local files can be attached and pictures shown inline (inline_images, each at an [image:name] line of the body); such a draft survives being opened and sent from Gmail's web editor. The reader confirms on a card first; nothing is sent.",
     inputSchema: schema(
       {
         to: { type: "string", description: "Addresses, separated by commas." },
         cc: { type: "string" },
         subject: { type: "string" },
         body: { type: "string", description: "Plain text." },
+        html: HTML_PROPERTY,
+        inline_images: INLINE_IMAGES_PROPERTY,
+        attachments: ATTACHMENTS_PROPERTY,
       },
       ["to", "subject", "body"],
     ),
-    call: (args) =>
-      withGmail(getApi(), args, async ({ api, client }) => {
-        const to = text(args, "to");
-        const body = untrimmed(args, "body");
-        if (to === "" || body.trim() === "") return "to and body are required.";
-        const mail = { to, cc: text(args, "cc"), subject: text(args, "subject"), body };
-        const refused = await confirmFirst(api, {
-          title: "Write a draft",
-          summary: `Draft “${mail.subject}” to ${listOrRaw(to)} in Gmail's Drafts. Nothing is sent.`,
-          details: mailDetails(newHeaders(mail), [], body),
-        });
-        if (refused !== null) return refused;
-        const made = await client.createDraft(buildNew(mail));
-        if (!made.ok) return failureText(made);
-        return `Draft ${made.value.id} is in Gmail's Drafts: open Drafts to see it. Nothing was sent.`;
-      }),
+    call: (args) => withGmail(getApi(), args, (session) => newDraft(args, session)),
   };
+}
+
+async function newDraft(args: Args, { api, client }: Session): Promise<string> {
+  const to = text(args, "to");
+  const body = untrimmed(args, "body");
+  if (to === "" || body.trim() === "") return "to and body are required.";
+  const content = await mailContent(args, body);
+  if (typeof content === "string") return content;
+  const mail = { to, cc: text(args, "cc"), subject: text(args, "subject"), body: content.text };
+  const refused = await confirmFirst(api, {
+    title: "Write a draft",
+    summary: `Draft “${mail.subject}” to ${listOrRaw(to)} in Gmail's Drafts${extrasText(content)}. Nothing is sent.`,
+    details: mailDetails(newHeaders(mail), content, body),
+  });
+  if (refused !== null) return refused;
+  const made = await client.createDraft(buildNew(mail, content.files, content.rich));
+  if (!made.ok) return failureText(made);
+  const what = `draft ${made.value.id}`;
+  const broken = await brokenCopy(client, "Saved", what, made.value.messageId, content);
+  if (broken !== null) return broken;
+  return `Draft ${made.value.id} is in Gmail's Drafts: open Drafts to see it. Nothing was sent.`;
 }
 
 type Outgoing = { to: string; cc: string; bcc: string; subject: string; body: string };
@@ -225,7 +174,7 @@ function sendTool(getApi: () => ExtensionApi | null): ExtensionTool {
   return {
     name: "gmail_send",
     description:
-      "Sends a new mail (not a reply), with local files attached if given. The reader confirms on a card showing the recipients, subject, text and files first.",
+      "Sends a new mail (not a reply), with local files attached and pictures shown inline (inline_images, each at an [image:name] line of the body) if given. The reader confirms on a card showing the recipients, subject, text, pictures and files first.",
     inputSchema: schema(
       {
         to: { type: "string", description: "Addresses, separated by commas." },
@@ -233,6 +182,8 @@ function sendTool(getApi: () => ExtensionApi | null): ExtensionTool {
         bcc: { type: "string" },
         subject: { type: "string" },
         body: { type: "string", description: "Plain text." },
+        html: HTML_PROPERTY,
+        inline_images: INLINE_IMAGES_PROPERTY,
         attachments: ATTACHMENTS_PROPERTY,
       },
       ["to", "subject", "body"],
@@ -250,27 +201,43 @@ async function sendNew(args: Args, { api, client }: Session): Promise<string> {
     body: untrimmed(args, "body"),
   };
   if (mail.to === "" || mail.body.trim() === "") return "to and body are required.";
-  const files = await filesFor(args);
-  if (typeof files === "string") return files;
+  const content = await mailContent(args, mail.body);
+  if (typeof content === "string") return content;
   const refused = await confirmFirst(api, {
     title: "Send an email",
-    summary: `Send “${mail.subject}” to ${listOrRaw(mail.to)}`,
-    details: mailDetails(newHeaders(mail), files, mail.body),
+    summary: `Send “${mail.subject}” to ${listOrRaw(mail.to)}${extrasText(content)}`,
+    details: mailDetails(newHeaders(mail), content, mail.body),
   });
   if (refused !== null) return refused;
-  const sent = await client.sendMessage(buildNew(mail, files));
-  return sent.ok ? sentText(sent.value.id, sent.value.threadId) : failureText(sent);
+  const sent = await client.sendMessage(
+    buildNew({ ...mail, body: content.text }, content.files, content.rich),
+  );
+  return await sentAnswer(client, sent, content);
+}
+
+/** The answer for a send: the ids, or the error when Gmail's sent copy lost a picture or file. */
+async function sentAnswer(
+  client: GmailClient,
+  sent: GmailResult<Sent>,
+  content: MailContent,
+): Promise<string> {
+  if (!sent.ok) return failureText(sent);
+  const what = `message ${sent.value.id} in thread ${sent.value.threadId}`;
+  const broken = await brokenCopy(client, "Sent", what, sent.value.id, content);
+  return broken ?? sentText(sent.value.id, sent.value.threadId);
 }
 
 function replyTool(getApi: () => ExtensionApi | null): ExtensionTool {
   return {
     name: "gmail_reply",
     description:
-      "Sends a reply in a Gmail thread, to its last message; `all` (default true) keeps everyone else on Cc. Local files are attached if given. The reader confirms on a card showing the recipients, subject, text and files first.",
+      "Sends a reply in a Gmail thread, to its last message; `all` (default true) keeps everyone else on Cc. Local files are attached and pictures shown inline (inline_images, each at an [image:name] line of the body) if given. The reader confirms on a card showing the recipients, subject, text, pictures and files first.",
     inputSchema: schema(
       {
         thread_id: { type: "string" },
         body: { type: "string", description: "The reply's plain text." },
+        html: HTML_PROPERTY,
+        inline_images: INLINE_IMAGES_PROPERTY,
         all: { type: "boolean", description: "Reply to everyone (default true)." },
         attachments: ATTACHMENTS_PROPERTY,
       },
@@ -284,18 +251,18 @@ async function sendReply(args: Args, { api, client, account }: Session): Promise
   const id = text(args, "thread_id");
   const body = untrimmed(args, "body");
   if (id === "" || body.trim() === "") return "thread_id and body are required.";
-  const files = await filesFor(args);
-  if (typeof files === "string") return files;
+  const content = await mailContent(args, body);
+  if (typeof content === "string") return content;
   const plan = await planReply(client, account, id, args["all"] !== false);
   if (typeof plan === "string") return plan;
   const refused = await confirmFirst(api, {
     title: "Send a reply",
-    summary: `Reply to “${plan.subject}”, sent to ${plan.envelope.to}`,
-    details: mailDetails(envelopeHeaders(plan.envelope), files, body),
+    summary: `Reply to “${plan.subject}”, sent to ${plan.envelope.to}${extrasText(content)}`,
+    details: mailDetails(envelopeHeaders(plan.envelope), content, body),
   });
   if (refused !== null) return refused;
-  const sent = await client.sendMessage(rawReply(plan.envelope, body, files), id);
-  return sent.ok ? sentText(sent.value.id, sent.value.threadId) : failureText(sent);
+  const raw = rawReply(plan.envelope, content.text, content.files, content.rich);
+  return await sentAnswer(client, await client.sendMessage(raw, id), content);
 }
 
 /** The message to forward: the one asked for, else the thread's last sent one. */
@@ -335,6 +302,7 @@ async function forward(args: Args, api: ExtensionApi, client: GmailClient): Prom
   if (typeof own === "string") return own;
   const files = await filesFor(args, own);
   if (typeof files === "string") return files;
+  const content: MailContent = { text: "", rich: undefined, images: [], files, html: "" };
   const mail: Outgoing = {
     to,
     cc: text(args, "cc"),
@@ -345,11 +313,10 @@ async function forward(args: Args, api: ExtensionApi, client: GmailClient): Prom
   const refused = await confirmFirst(api, {
     title: "Forward an email",
     summary: `Forward “${mail.subject}” to ${listOrRaw(to)}`,
-    details: mailDetails(newHeaders(mail), files, mail.body),
+    details: mailDetails(newHeaders(mail), content, mail.body),
   });
   if (refused !== null) return refused;
-  const sent = await client.sendMessage(buildNew(mail, files));
-  return sent.ok ? sentText(sent.value.id, sent.value.threadId) : failureText(sent);
+  return await sentAnswer(client, await client.sendMessage(buildNew(mail, files)), content);
 }
 
 function forwardTool(getApi: () => ExtensionApi | null): ExtensionTool {

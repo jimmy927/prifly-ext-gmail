@@ -51,10 +51,10 @@ Changes, each after a confirm card:
 
 | Tool | What it does |
 |---|---|
-| `gmail_draft_reply` `{ thread_id, body, all, replace_draft_id }` | A threaded reply draft (`Re:`, In-Reply-To, References); `all` (default true) keeps everyone else on Cc; `replace_draft_id` rewrites a draft instead of adding one |
-| `gmail_new_draft` `{ to, cc, subject, body }` | A new draft |
-| `gmail_send` `{ to, cc, bcc, subject, body, attachments }` | Sends a new mail; `attachments` are absolute paths of local files (25 MB in all) |
-| `gmail_reply` `{ thread_id, body, all, attachments }` | Sends a reply in the thread, to its last message, as `gmail_draft_reply` addresses it |
+| `gmail_draft_reply` `{ thread_id, body, html, inline_images, attachments, all, replace_draft_id }` | A threaded reply draft (`Re:`, In-Reply-To, References); `all` (default true) keeps everyone else on Cc; `replace_draft_id` rewrites the whole draft (text, pictures and files) instead of adding one |
+| `gmail_new_draft` `{ to, cc, subject, body, html, inline_images, attachments }` | A new draft |
+| `gmail_send` `{ to, cc, bcc, subject, body, html, inline_images, attachments }` | Sends a new mail; `attachments` are absolute paths of local files (25 MB in all, pictures included) |
+| `gmail_reply` `{ thread_id, body, html, inline_images, attachments, all }` | Sends a reply in the thread, to its last message, as `gmail_draft_reply` addresses it |
 | `gmail_forward` `{ thread_id, message_id, to, cc, bcc, note, include_attachments, attachments }` | Forwards a message (the thread's last, or `message_id`) with a note, its own attachments and any local files |
 | `gmail_label_create` `{ name }` | Creates a label |
 | `gmail_label_threads` `{ thread_ids, add, remove }` | Adds and removes labels, by name or id, on whole threads |
@@ -62,6 +62,25 @@ Changes, each after a confirm card:
 | `gmail_mark` `{ thread_ids, read }` | Marks threads read (default) or unread |
 | `gmail_trash` `{ thread_ids }` | Moves threads to the trash |
 | `gmail_api` `{ method, path, query, body }` | Any Gmail REST call below `gmail/v1/users/me`; a GET runs at once, any other method shows the exact request first (a `raw` mail decoded) |
+
+### Pictures and files in a mail
+
+`inline_images` is a list of `{ name, path }` (absolute paths of png, jpeg,
+gif or webp files). Each picture shows where `body` has `[image:name]` on a
+line of its own; the tool refuses (no card, nothing written) when a marker
+names no image, an image has no marker, or a path is relative, unreadable or
+not an image. The mail then goes out as `multipart/alternative` (plain text
+and HTML) inside `multipart/related` with the pictures, inside
+`multipart/mixed` when there are `attachments` too. Without `html`, the HTML
+is made from `body`: blank lines split paragraphs, a single line break
+becomes `<br>`, `- ` / `* ` lines a list, `1. ` / `1) ` lines a numbered list,
+everything escaped. With `html` (which may hold the same markers), `body`
+stays the plain-text alternative. Each picture part carries a Content-ID and
+an equal `X-Attachment-Id`, which keeps Gmail's web editor from dropping it
+when you open the draft and send it from there. The confirm card lists the
+pictures and files by name and size. After every draft save and send the
+extension reads the stored message back, and answers "Saved, but Gmail's copy
+is broken: …" when a picture or file is missing there.
 
 `gmail_sign_in` `{ account }` opens your browser to sign in: again for the
 account in use, or a new one with `account: "new"`.
@@ -93,10 +112,12 @@ file, 120 per function, cognitive complexity 15, no `any`, no `!`).
 | `sign-in.ts` | The scopes, and `gmail_sign_in` |
 | `connection.ts` | Picks the connection; the texts for no connection, an ended grant and an HTTP error |
 | `gmail.ts`, `gmail-types.ts` | The REST client over `api.connections.fetch`, and tolerant parsers of its answers |
-| `mime.ts` | Reads a message into text and attachments; builds the RFC 822 reply, new mail and forward, with files |
+| `mime.ts` | Reads a message into text and attachments; builds the RFC 822 reply, new mail and forward, with files and inline pictures; checks a saved copy for lost parts |
+| `mail-html.ts` | The `[image:name]` markers, and the HTML made from a plain body |
+| `outgoing.ts` | Reads the local files and pictures a tool names, the card text that lists them, and the read-back after a save or send |
 | `save.ts` | A thread as Markdown, and on disk with its attachments |
 | `prompt.md` | The rules added to every session |
-| `test/` | `fake-api.ts` (the template's fake `api`, with `confirm` and `status`), `fake-gmail.ts` (an in-memory mailbox) and the tests |
+| `test/` | `fake-api.ts` (the template's fake `api`, with `confirm` and `status`), `fake-gmail.ts` (an in-memory mailbox that reads stored mail back through `parse-raw.ts`) and the tests |
 
 ## License and contributing
 

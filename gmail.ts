@@ -14,6 +14,7 @@ import {
   type GmailThread,
   isRecord,
   list,
+  parseMessage,
   parseThread,
   str,
 } from "./gmail-types";
@@ -47,7 +48,8 @@ export type ThreadSummary = {
   people: Mailbox[];
 };
 
-export type Draft = { id: string; threadId: string };
+/** A draft: its id, its thread and the id of the message it holds (which changes on every update). */
+export type Draft = { id: string; threadId: string; messageId: string };
 
 export type Sent = { id: string; threadId: string };
 
@@ -65,6 +67,8 @@ export type GmailClient = {
   /** The summaries of the threads with these ids, in order. */
   summaries(ids: string[]): Promise<GmailResult<ThreadSummary[]>>;
   thread(id: string): Promise<GmailResult<GmailThread>>;
+  /** One message as Gmail stored it (`format=full`). */
+  message(id: string): Promise<GmailResult<GmailMessage>>;
   /** The attachment's bytes, base64url. */
   attachment(messageId: string, attachmentId: string): Promise<GmailResult<string>>;
   labels(): Promise<GmailResult<Label[]>>;
@@ -191,7 +195,14 @@ export function gmailClient(options: GmailClientOptions): GmailClient {
     if (!got.ok) return got;
     const draft = isRecord(got.value) ? got.value : {};
     const message = isRecord(draft["message"]) ? draft["message"] : {};
-    return { ok: true, value: { id: str(draft["id"]), threadId: str(message["threadId"]) } };
+    return {
+      ok: true,
+      value: {
+        id: str(draft["id"]),
+        threadId: str(message["threadId"]),
+        messageId: str(message["id"]),
+      },
+    };
   };
 
   const asNull = (got: GmailResult<unknown>): GmailResult<null> =>
@@ -238,6 +249,11 @@ export function gmailClient(options: GmailClientOptions): GmailClient {
     summaries,
 
     thread: (id) => asThread(id, "format=full"),
+
+    async message(id) {
+      const got = await json(`/messages/${encodeURIComponent(id)}?format=full`);
+      return got.ok ? { ok: true, value: parseMessage(got.value) } : got;
+    },
 
     async attachment(messageId, attachmentId) {
       const path = `/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`;

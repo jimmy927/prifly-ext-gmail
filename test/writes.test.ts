@@ -123,7 +123,7 @@ test("gmail_send shows the recipients, subject, text and files, then sends them"
   expect(answer).toBe("Sent: message s1 in thread ts1.");
   const spec = w.confirms[0]?.spec;
   expect(spec?.title).toBe("Send an email");
-  expect(spec?.summary).toBe("Send “Notes” to Ada <ada@example.com>");
+  expect(spec?.summary).toBe("Send “Notes” to Ada <ada@example.com> with 1 attachment");
   expect(spec?.details).toBe(
     [
       "To: Ada <ada@example.com>",

@@ -107,14 +107,17 @@ test("drafts are created and updated through /drafts, with the thread id", async
   const { gmail, client } = setup();
   expect(await client.createDraft("RAW1", "t1")).toEqual({
     ok: true,
-    value: { id: "r1", threadId: "t1" },
+    value: { id: "r1", threadId: "t1", messageId: "dm-r1" },
   });
   expect(await client.updateDraft("r1", "RAW2", "t1")).toEqual({
     ok: true,
-    value: { id: "r1", threadId: "t1" },
+    value: { id: "r1", threadId: "t1", messageId: "dm-r1" },
   });
   expect(gmail.drafts.get("r1")?.message).toEqual({ raw: "RAW2", threadId: "t1" });
-  expect(await client.createDraft("RAW3")).toEqual({ ok: true, value: { id: "r2", threadId: "" } });
+  expect(await client.createDraft("RAW3")).toEqual({
+    ok: true,
+    value: { id: "r2", threadId: "", messageId: "dm-r2" },
+  });
   expect(gmail.drafts.get("r2")?.message).toEqual({ raw: "RAW3" });
 });
 

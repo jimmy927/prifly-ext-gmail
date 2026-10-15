@@ -119,6 +119,38 @@ export function readMessage(payload: Part): ReadMessage {
   };
 }
 
+const allParts = (part: Part): Part[] => [part, ...part.parts.flatMap(allParts)];
+
+/**
+ * What is wrong with Gmail's saved copy of a mail (its `format=full` payload):
+ * a `cid:` in the HTML that no part carries as Content-ID, and a file name in
+ * `expectedFiles` (inline images and attachments) that no part has. Empty when
+ * the copy is whole.
+ */
+export function savedCopyProblems(payload: Part, expectedFiles: string[]): string[] {
+  const parts = allParts(payload);
+  const contentIds = new Set(
+    parts.map((part) => headerValue(part.headers, "Content-ID").replace(/^<|>$/g, "")),
+  );
+  const html = parts
+    .filter((part) => part.mimeType === "text/html" && part.body.data !== "")
+    .map((part) => decodeBase64url(part.body.data))
+    .join("\n");
+  const cids = new Set(
+    [...html.matchAll(/\bcid:([^"'\s>)]+)/gi)].flatMap((found) => found[1] ?? []),
+  );
+  const problems = [...cids]
+    .filter((cid) => !contentIds.has(cid))
+    .map((cid) => `the HTML shows cid:${cid} but no part has that Content-ID`);
+  const names = parts.map((part) => part.filename).filter((name) => name !== "");
+  for (const wanted of expectedFiles) {
+    const at = names.indexOf(wanted);
+    if (at < 0) problems.push(`the file ${wanted} is missing`);
+    else names.splice(at, 1);
+  }
+  return problems;
+}
+
 export type Mailbox = { name: string; address: string };
 
 /** Splits an address list on the commas outside quotes and angle brackets. */
@@ -219,35 +251,89 @@ function attachmentPart(file: FileAttachment): string[] {
   ];
 }
 
-/** The lines after the headers: plain text alone, or multipart/mixed with the files. */
-function bodyLines(body: string, attachments: FileAttachment[]): string[] {
-  const text = [
-    "Content-Type: text/plain; charset=UTF-8",
+/** A picture that shows inside the mail's HTML through `cid:<id>`. */
+export type InlineImage = {
+  /** The name the body's `[image:name]` marker uses. */
+  name: string;
+  filename: string;
+  mimeType: string;
+  bytes: Uint8Array;
+  /** The Content-ID, without angle brackets: `ii_` and random hex. */
+  id: string;
+};
+
+/** What a mail carries besides its plain text: an HTML alternative and the images it shows. */
+export type RichContent = { html: string; images: InlineImage[] };
+
+/**
+ * An inline image part as Gmail's own editor writes it. Gmail's web editor
+ * drops an inline part without `X-Attachment-Id` when it opens a draft, so the
+ * header carries the Content-ID value.
+ */
+function imagePart(image: InlineImage): string[] {
+  return [
+    `Content-Type: ${image.mimeType}; ${fileParameter("name", image.filename)}`,
+    `Content-Disposition: inline; ${fileParameter("filename", image.filename)}`,
     "Content-Transfer-Encoding: base64",
+    `Content-ID: <${image.id}>`,
+    `X-Attachment-Id: ${image.id}`,
     "",
-    base64Lines(textBytes(body)),
+    base64Lines(image.bytes),
   ];
-  if (attachments.length === 0) return text;
+}
+
+const textPart = (body: string): string[] => [
+  "Content-Type: text/plain; charset=UTF-8",
+  "Content-Transfer-Encoding: base64",
+  "",
+  base64Lines(textBytes(body)),
+];
+
+const htmlPart = (html: string): string[] => [
+  "Content-Type: text/html; charset=UTF-8",
+  "Content-Transfer-Encoding: base64",
+  "",
+  base64Lines(textBytes(html)),
+];
+
+/** A multipart part or message body: its Content-Type, a blank line, the parts between boundaries. */
+function multipart(subtype: string, parts: string[][]): string[] {
   const boundary = `prifly-${crypto.randomUUID()}`;
   return [
-    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    `Content-Type: multipart/${subtype}; boundary="${boundary}"`,
     "",
-    ...[text, ...attachments.map(attachmentPart)].flatMap((part) => [`--${boundary}`, ...part]),
+    ...parts.flatMap((part) => [`--${boundary}`, ...part]),
     `--${boundary}--`,
   ];
+}
+
+/**
+ * The lines after the headers, in Gmail's own shape: text/plain alone;
+ * multipart/alternative[plain, html] with HTML; multipart/related[alternative,
+ * images] with inline images; multipart/mixed[that, files] with files.
+ */
+function bodyLines(body: string, attachments: FileAttachment[], rich?: RichContent): string[] {
+  let core = textPart(body);
+  if (rich !== undefined) {
+    core = multipart("alternative", [core, htmlPart(rich.html)]);
+    if (rich.images.length > 0) core = multipart("related", [core, ...rich.images.map(imagePart)]);
+  }
+  if (attachments.length === 0) return core;
+  return multipart("mixed", [core, ...attachments.map(attachmentPart)]);
 }
 
 function assemble(
   headers: [string, string][],
   body: string,
   attachments: FileAttachment[] = [],
+  rich?: RichContent,
 ): string {
   const lines = headers
     .filter(([, value]) => value !== "")
     // A line break stays only as a fold (CRLF + space), so a value cannot start a new header.
     .map(([name, value]) => `${name}: ${value.replace(/\r\n(?![ \t])|\r(?!\n)|(?<!\r)\n/g, " ")}`);
   return encodeBase64url(
-    [...lines, "MIME-Version: 1.0", ...bodyLines(body, attachments)].join("\r\n"),
+    [...lines, "MIME-Version: 1.0", ...bodyLines(body, attachments, rich)].join("\r\n"),
   );
 }
 
@@ -307,6 +393,7 @@ export function rawReply(
   envelope: ReplyEnvelope,
   body: string,
   attachments: FileAttachment[] = [],
+  rich?: RichContent,
 ): string {
   return assemble(
     [
@@ -318,6 +405,7 @@ export function rawReply(
     ],
     body,
     attachments,
+    rich,
   );
 }
 
@@ -342,7 +430,11 @@ export function listOrRaw(value: string): string {
 }
 
 /** The raw (base64url RFC 822) text of a new mail. */
-export function buildNew(mail: NewMail, attachments: FileAttachment[] = []): string {
+export function buildNew(
+  mail: NewMail,
+  attachments: FileAttachment[] = [],
+  rich?: RichContent,
+): string {
   return assemble(
     [
       ["To", listOrRaw(mail.to)],
@@ -352,6 +444,7 @@ export function buildNew(mail: NewMail, attachments: FileAttachment[] = []): str
     ],
     mail.body,
     attachments,
+    rich,
   );
 }
 

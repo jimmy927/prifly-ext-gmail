@@ -6,6 +6,7 @@
  */
 
 import type { FakeProvider } from "./fake-api";
+import { parseRaw, withoutFiles } from "./parse-raw";
 
 export const b64 = (data: string | Uint8Array): string => Buffer.from(data).toString("base64url");
 
@@ -119,6 +120,10 @@ export type FakeGmail = {
   hits: () => number;
   /** Every mail sent through /messages/send, in order. */
   sent: { raw: string; threadId?: string }[];
+  /** Every draft message and sent mail by message id, as raw, to read back with `format=full`. */
+  messages: Map<string, { raw: string; threadId: string }>;
+  /** While `on`, a stored mail reads back without its pictures and files, as if Gmail dropped them. */
+  loseFiles: { on: boolean };
   /** The labels by id, system ones included. */
   labels: Map<string, { id: string; name: string; type: string }>;
   /** Threads moved to the trash, in order. */
@@ -170,6 +175,32 @@ function throttled(throttle: FakeGmail["throttle"]): Response | null {
   });
 }
 
+const readAttachment = (id: string): Response => {
+  const bytes = ATTACHMENTS[id];
+  if (bytes === undefined) return new Response("no attachment", { status: 404 });
+  return Response.json({ size: bytes.length, data: b64(bytes) });
+};
+
+/** A stored draft message or sent mail, parsed from its raw like Gmail's `format=full`. */
+function storedMessage(messages: FakeGmail["messages"], id: string, lose: boolean): Response {
+  const stored = messages.get(id);
+  if (stored === undefined) return new Response("not found", { status: 404 });
+  const payload = parseRaw(stored.raw);
+  const shown = lose ? withoutFiles(payload) : payload;
+  return Response.json({ id, threadId: stored.threadId, labelIds: [], payload: shown });
+}
+
+function readThread(threads: Map<string, Json[]>, id: string, url: URL): Response {
+  const messages = threads.get(id);
+  if (messages === undefined) return new Response("not found", { status: 404 });
+  const wanted = url.searchParams.getAll("metadataHeaders");
+  const metadata = url.searchParams.get("format") === "metadata";
+  return Response.json({
+    id,
+    messages: metadata ? messages.map((each) => metadataOnly(each, wanted)) : messages,
+  });
+}
+
 export function fakeGmail(): FakeGmail {
   const threads = new Map<string, Json[]>([
     ["t1", structuredClone([FIRST, SECOND])],
@@ -177,6 +208,8 @@ export function fakeGmail(): FakeGmail {
   ]);
   const drafts = new Map<string, StoredDraft>();
   const sent: FakeGmail["sent"] = [];
+  const messages: FakeGmail["messages"] = new Map();
+  const loseFiles = { on: false };
   const trashed: string[] = [];
   const labels = startLabels();
   const throttle = { status: 429, retryAfter: "0", times: 0 };
@@ -193,11 +226,16 @@ export function fakeGmail(): FakeGmail {
     const routes: [string, RegExp, (found: RegExpExecArray) => Response | Promise<Response>][] = [
       ["GET", /^\/profile$/, () => Response.json({ emailAddress: SELF, historyId: "12" })],
       ["GET", /^\/threads$/, () => listThreads(url)],
-      ["GET", /^\/threads\/([^/]+)$/, (found) => readThread(found[1] ?? "", url)],
+      ["GET", /^\/threads\/([^/]+)$/, (found) => readThread(threads, found[1] ?? "", url)],
       [
         "GET",
         /^\/messages\/[^/]+\/attachments\/([^/]+)$/,
         (found) => readAttachment(found[1] ?? ""),
+      ],
+      [
+        "GET",
+        /^\/messages\/([^/]+)$/,
+        (found) => storedMessage(messages, found[1] ?? "", loseFiles.on),
       ],
       ["GET", /^\/labels$/, () => Response.json({ labels: [...labels.values()] })],
       ["GET", /^\/labels\/([^/]+)$/, (found) => readLabel(found[1] ?? "")],
@@ -229,17 +267,6 @@ export function fakeGmail(): FakeGmail {
     return Response.json({ threads: hit.slice(0, max).map(([id]) => ({ id })) });
   };
 
-  const readThread = (id: string, url: URL): Response => {
-    const messages = threads.get(id);
-    if (messages === undefined) return new Response("not found", { status: 404 });
-    const wanted = url.searchParams.getAll("metadataHeaders");
-    const metadata = url.searchParams.get("format") === "metadata";
-    return Response.json({
-      id,
-      messages: metadata ? messages.map((each) => metadataOnly(each, wanted)) : messages,
-    });
-  };
-
   /** A label with its counts: a thread counts as unread when one of its messages is. */
   const readLabel = (id: string): Response => {
     const label = labels.get(id);
@@ -264,9 +291,11 @@ export function fakeGmail(): FakeGmail {
     const message = (await request.json()) as { raw: string; threadId?: string };
     sent.push(message);
     const id = `s${++sentCount}`;
+    const threadId = message.threadId ?? `ts${sentCount}`;
+    messages.set(id, { raw: message.raw, threadId });
     return Response.json({
       id,
-      threadId: message.threadId ?? `ts${sentCount}`,
+      threadId,
       labelIds: ["SENT"],
     });
   };
@@ -290,12 +319,6 @@ export function fakeGmail(): FakeGmail {
     return Response.json({ id });
   };
 
-  const readAttachment = (id: string): Response => {
-    const bytes = ATTACHMENTS[id];
-    if (bytes === undefined) return new Response("no attachment", { status: 404 });
-    return Response.json({ size: bytes.length, data: b64(bytes) });
-  };
-
   /** POST /drafts creates, PUT /drafts/{id} replaces. */
   const writeDraft = async (request: Request, existing: string | undefined): Promise<Response> => {
     if (existing !== undefined && !drafts.has(existing)) {
@@ -304,6 +327,7 @@ export function fakeGmail(): FakeGmail {
     const sent = (await request.json()) as StoredDraft;
     const id = existing ?? `r${++draftCount}`;
     drafts.set(id, { id, message: sent.message });
+    messages.set(`dm-${id}`, { raw: sent.message.raw, threadId: sent.message.threadId ?? "" });
     return Response.json({ id, message: { id: `dm-${id}`, threadId: sent.message.threadId } });
   };
 
@@ -314,6 +338,8 @@ export function fakeGmail(): FakeGmail {
     throttle,
     hits: () => hits,
     sent,
+    messages,
+    loseFiles,
     labels,
     trashed,
   };
