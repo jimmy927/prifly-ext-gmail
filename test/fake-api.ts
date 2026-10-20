@@ -210,6 +210,7 @@ export function fakeApi(
       void fake.notices.push({ text, tone: notifyOptions?.tone, session: notifyOptions?.session }),
     machines: { report: () => undefined },
     onAction: () => undefined,
+    onRent: () => undefined,
     sessions: () => [],
     session: () => null,
     log: (event, fields) => void fake.logs.push({ event, fields }),

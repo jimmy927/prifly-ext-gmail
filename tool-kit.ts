@@ -10,27 +10,6 @@ import { type GmailClient, gmailClient } from "./gmail";
 
 export type Args = Record<string, unknown>;
 
-/**
- * The mail as prifly draws it on a confirm card. Switch to the package's
- * `ConfirmMail` and `ConfirmSpec` when the dependency is bumped to v0.8.0,
- * which adds them; an older prifly ignores `mail` and shows summary/details.
- */
-export type ConfirmMail = {
-  from?: string;
-  to: string;
-  cc?: string;
-  bcc?: string;
-  subject: string;
-  draft?: boolean;
-  text: string;
-  html?: string;
-  images?: { id: string; mimeType: string; bytes: Uint8Array }[];
-  attachments?: { filename: string; mimeType: string; size: number }[];
-};
-
-/** A confirm spec that may carry the mail itself. */
-export type MailConfirmSpec = ConfirmSpec & { mail?: ConfirmMail };
-
 export const CANCELLED = "Not done: you cancelled";
 
 export const NO_CONFIRM =
@@ -99,10 +78,7 @@ export async function withGmail(
  * Shows the confirm card for a write. Null when the reader confirmed, so the
  * write goes ahead; otherwise the text the tool answers instead of writing.
  */
-export async function confirmFirst(
-  api: ExtensionApi,
-  spec: MailConfirmSpec,
-): Promise<string | null> {
+export async function confirmFirst(api: ExtensionApi, spec: ConfirmSpec): Promise<string | null> {
   if (api.confirm === undefined) return NO_CONFIRM;
   return (await api.confirm(spec)) ? null : CANCELLED;
 }

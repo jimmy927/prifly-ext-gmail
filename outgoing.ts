@@ -7,10 +7,11 @@
 
 import { readFile } from "node:fs/promises";
 import { basename, extname, isAbsolute } from "node:path";
+import type { ConfirmMail } from "@prifly/extension-api";
 import { failureText, type GmailClient } from "./gmail";
 import { type ImageFile, type RichMail, richBody } from "./mail-html";
 import { type FileAttachment, type InlineImage, type RichContent, savedCopyProblems } from "./mime";
-import { type Args, type ConfirmMail, strings, untrimmed } from "./tool-kit";
+import { type Args, strings, untrimmed } from "./tool-kit";
 
 /** Gmail's own limit for what a mail carries. */
 const MAX_ATTACHED_BYTES = 25 * 1024 * 1024;

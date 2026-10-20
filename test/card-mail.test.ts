@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ConfirmMail } from "../tool-kit";
+import type { ConfirmMail } from "@prifly/extension-api";
 import { PDF_BYTES, PNG_BYTES, SELF } from "./fake-gmail";
 import { world } from "./world";
 
@@ -39,7 +39,7 @@ function started() {
 
 /** The `mail` of the first confirm card the world showed. */
 const shownMail = (w: ReturnType<typeof started>): ConfirmMail | undefined =>
-  (w.confirms[0]?.spec as { mail?: ConfirmMail } | undefined)?.mail;
+  w.confirms[0]?.spec.mail;
 
 test("a reply's card mail carries its two images, its file and the HTML with cid refs", async () => {
   const w = started();
