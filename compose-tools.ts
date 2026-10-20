@@ -24,11 +24,13 @@ import {
 import {
   ATTACHMENTS_PROPERTY,
   brokenCopy,
+  cardMail,
   extrasText,
   filesFor,
   HTML_PROPERTY,
   INLINE_IMAGES_PROPERTY,
   type MailContent,
+  type MailEnvelope,
   mailContent,
   mailDetails,
 } from "./outgoing";
@@ -49,6 +51,16 @@ const envelopeHeaders = (envelope: ReplyEnvelope): [string, string][] => [
 ];
 
 type ReplyPlan = { envelope: ReplyEnvelope; subject: string };
+
+/** The card's envelope for a reply: the plan's recipients and the subject it goes out with. */
+const replyCard = (plan: ReplyPlan, account: string, draft: boolean): MailEnvelope => ({
+  account,
+  to: plan.envelope.to,
+  cc: plan.envelope.cc,
+  bcc: "",
+  subject: plan.envelope.subject,
+  draft,
+});
 
 /** Reads the thread and works out who a reply goes to, or why it cannot be answered. */
 async function planReply(
@@ -99,6 +111,7 @@ async function draftReply(args: Args, { api, client, account }: Session): Promis
     title: replace === "" ? "Write a draft reply" : "Rewrite a draft reply",
     summary: `Draft a reply to “${plan.subject}” for ${plan.envelope.to}, in the thread${extrasText(content)}. Nothing is sent.`,
     details: mailDetails(envelopeHeaders(plan.envelope), content, body),
+    mail: cardMail(replyCard(plan, account, true), content, content.text),
   });
   if (refused !== null) return refused;
   const raw = rawReply(plan.envelope, content.text, content.files, content.rich);
@@ -137,7 +150,7 @@ function newDraftTool(getApi: () => ExtensionApi | null): ExtensionTool {
   };
 }
 
-async function newDraft(args: Args, { api, client }: Session): Promise<string> {
+async function newDraft(args: Args, { api, client, account }: Session): Promise<string> {
   const to = text(args, "to");
   const body = untrimmed(args, "body");
   if (to === "" || body.trim() === "") return "to and body are required.";
@@ -148,6 +161,7 @@ async function newDraft(args: Args, { api, client }: Session): Promise<string> {
     title: "Write a draft",
     summary: `Draft “${mail.subject}” to ${listOrRaw(to)} in Gmail's Drafts${extrasText(content)}. Nothing is sent.`,
     details: mailDetails(newHeaders(mail), content, body),
+    mail: cardMail({ account, ...mail, bcc: "", draft: true }, content, content.text),
   });
   if (refused !== null) return refused;
   const made = await client.createDraft(buildNew(mail, content.files, content.rich));
@@ -192,7 +206,7 @@ function sendTool(getApi: () => ExtensionApi | null): ExtensionTool {
   };
 }
 
-async function sendNew(args: Args, { api, client }: Session): Promise<string> {
+async function sendNew(args: Args, { api, client, account }: Session): Promise<string> {
   const mail: Outgoing = {
     to: text(args, "to"),
     cc: text(args, "cc"),
@@ -207,6 +221,7 @@ async function sendNew(args: Args, { api, client }: Session): Promise<string> {
     title: "Send an email",
     summary: `Send “${mail.subject}” to ${listOrRaw(mail.to)}${extrasText(content)}`,
     details: mailDetails(newHeaders(mail), content, mail.body),
+    mail: cardMail({ account, ...mail, draft: false }, content, content.text),
   });
   if (refused !== null) return refused;
   const sent = await client.sendMessage(
@@ -259,6 +274,7 @@ async function sendReply(args: Args, { api, client, account }: Session): Promise
     title: "Send a reply",
     summary: `Reply to “${plan.subject}”, sent to ${plan.envelope.to}${extrasText(content)}`,
     details: mailDetails(envelopeHeaders(plan.envelope), content, body),
+    mail: cardMail(replyCard(plan, account, false), content, content.text),
   });
   if (refused !== null) return refused;
   const raw = rawReply(plan.envelope, content.text, content.files, content.rich);
@@ -290,7 +306,7 @@ async function originalFiles(
   return files;
 }
 
-async function forward(args: Args, api: ExtensionApi, client: GmailClient): Promise<string> {
+async function forward(args: Args, { api, client, account }: Session): Promise<string> {
   const id = text(args, "thread_id");
   const to = text(args, "to");
   if (id === "" || to === "") return "thread_id and to are required.";
@@ -314,6 +330,7 @@ async function forward(args: Args, api: ExtensionApi, client: GmailClient): Prom
     title: "Forward an email",
     summary: `Forward “${mail.subject}” to ${listOrRaw(to)}`,
     details: mailDetails(newHeaders(mail), content, mail.body),
+    mail: cardMail({ account, ...mail, draft: false }, content, mail.body),
   });
   if (refused !== null) return refused;
   return await sentAnswer(client, await client.sendMessage(buildNew(mail, files)), content);
@@ -340,7 +357,7 @@ function forwardTool(getApi: () => ExtensionApi | null): ExtensionTool {
       },
       ["thread_id", "to"],
     ),
-    call: (args) => withGmail(getApi(), args, ({ api, client }) => forward(args, api, client)),
+    call: (args) => withGmail(getApi(), args, (session) => forward(args, session)),
   };
 }
 

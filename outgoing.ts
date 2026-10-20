@@ -10,7 +10,7 @@ import { basename, extname, isAbsolute } from "node:path";
 import { failureText, type GmailClient } from "./gmail";
 import { type ImageFile, type RichMail, richBody } from "./mail-html";
 import { type FileAttachment, type InlineImage, type RichContent, savedCopyProblems } from "./mime";
-import { type Args, strings, untrimmed } from "./tool-kit";
+import { type Args, type ConfirmMail, strings, untrimmed } from "./tool-kit";
 
 /** Gmail's own limit for what a mail carries. */
 const MAX_ATTACHED_BYTES = 25 * 1024 * 1024;
@@ -215,6 +215,54 @@ export function mailDetails(
   const shown = [...lines, "", body];
   if (content.html !== "") shown.push("", "HTML version:", content.html);
   return shown.join("\n");
+}
+
+/** The envelope and kind of a mail for its card; `account` is the signed-in address. */
+export type MailEnvelope = {
+  account: string;
+  to: string;
+  cc: string;
+  bcc: string;
+  subject: string;
+  /** True for the draft tools, which only save. */
+  draft: boolean;
+};
+
+/**
+ * The mail a confirm card draws: the text and the HTML that actually go out
+ * (`cid:` refs resolve to `images` by id), and every file it carries (for a
+ * forward, `content.files` already holds the original's attachments).
+ */
+export function cardMail(
+  envelope: MailEnvelope,
+  content: Pick<MailContent, "rich" | "files">,
+  text: string,
+): ConfirmMail {
+  const mail: ConfirmMail = {
+    from: envelope.account,
+    to: envelope.to,
+    subject: envelope.subject,
+    text,
+  };
+  if (envelope.cc !== "") mail.cc = envelope.cc;
+  if (envelope.bcc !== "") mail.bcc = envelope.bcc;
+  if (envelope.draft) mail.draft = true;
+  if (content.rich !== undefined) {
+    mail.html = content.rich.html;
+    mail.images = content.rich.images.map((each) => ({
+      id: each.id,
+      mimeType: each.mimeType,
+      bytes: each.bytes,
+    }));
+  }
+  if (content.files.length > 0) {
+    mail.attachments = content.files.map((each) => ({
+      filename: each.filename,
+      mimeType: each.mimeType,
+      size: each.bytes.length,
+    }));
+  }
+  return mail;
 }
 
 /**
