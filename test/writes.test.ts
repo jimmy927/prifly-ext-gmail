@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { NO_SEND } from "../api-tools";
 import { decodeBase64url } from "../mime";
 import { CANCELLED, NO_CONFIRM } from "../tool-kit";
 import { world } from "./world";
@@ -97,15 +98,55 @@ test("gmail_api puts the query in the URL and refuses a path outside users/me", 
 test("gmail_api shows the exact request on the card, with a raw mail decoded", async () => {
   const w = started();
   const raw = Buffer.from("To: ada@example.com\r\nSubject: Hi\r\n\r\nHello").toString("base64url");
-  await w.call("gmail_api", { method: "POST", path: "/messages/send", body: { raw } });
+  await w.call("gmail_api", { method: "POST", path: "/drafts", body: { message: { raw } } });
   const spec = w.confirms[0]?.spec;
-  expect(spec?.summary).toBe("POST /messages/send");
-  expect(spec?.details).toContain(
-    "POST https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-  );
+  expect(spec?.summary).toBe("POST /drafts");
+  expect(spec?.details).toContain("POST https://gmail.googleapis.com/gmail/v1/users/me/drafts");
   expect(spec?.details).toContain(raw);
   expect(spec?.details).toContain("To: ada@example.com\r\nSubject: Hi");
-  expect(w.gmail.sent).toEqual([{ raw }]);
+  expect(w.gmail.drafts.get("r1")?.message.raw).toBe(raw);
+  expect(w.gmail.sent).toEqual([]);
+});
+
+test("gmail_api refuses every send path, whatever the method, without a card", async () => {
+  const w = started({ choose: "send" });
+  const raw = Buffer.from("To: ada@example.com\r\nSubject: Hi\r\n\r\nHello").toString("base64url");
+  const paths = [
+    "/messages/send",
+    "/drafts/send",
+    "messages/send",
+    "users/me/messages/send",
+    "/gmail/v1/users/me/drafts/send",
+    "/messages/send/",
+    "/drafts/send?alt=json",
+    "/messages/SEND",
+    "/messages/%73end",
+  ];
+  for (const path of paths) {
+    for (const method of ["POST", "PUT", "GET"]) {
+      const answer = await w.call("gmail_api", { method, path, body: { raw, id: "r1" } });
+      expect(answer).toBe(NO_SEND);
+    }
+  }
+  expect(w.confirms).toEqual([]);
+  expect(w.chooses).toEqual([]);
+  // Only the status line's own label reads went out: no send, and no write.
+  expect(w.connections.requests.filter((each) => each.url.includes("/send"))).toEqual([]);
+  expect(w.writes()).toEqual([]);
+  expect(w.gmail.sent).toEqual([]);
+});
+
+test("gmail_api still makes other writes after the card, and its description says it never sends", async () => {
+  const w = started();
+  const answer = await w.call("gmail_api", {
+    method: "POST",
+    path: "/labels",
+    body: { name: "Sender" },
+  });
+  expect(JSON.parse(answer)["name"]).toBe("Sender");
+  expect(w.confirms.length).toBe(1);
+  const tool = w.fake.tools().find((each) => each.name === "gmail_api");
+  expect(tool?.description).toContain("never sends mail");
 });
 
 test("gmail_send shows the recipients, subject, text and files, then sends them", async () => {

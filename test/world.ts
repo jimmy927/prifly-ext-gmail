@@ -34,6 +34,11 @@ export function world(
     folder?: string;
     /** What the reader answers on every confirm card (default: Confirm). */
     confirm?: boolean;
+    /**
+     * What the reader picks on every two-way mail card: given (null for
+     * Cancel), prifly has "choose-mail"; left out, a prifly without it.
+     */
+    choose?: "draft" | "send" | null;
   } = {},
 ) {
   const gmail: FakeGmail = fakeGmail();
@@ -44,6 +49,9 @@ export function world(
   /** The requests that could change the mailbox: everything but GET. */
   const writes = () => connections.requests.filter((each) => each.method !== "GET");
   const confirms: Shown[] = [];
+  /** The two-way mail cards shown, apart from the confirm cards. */
+  const chooses: Shown[] = [];
+  const { choose } = options;
   const fake = fakeApi({
     connections: connections.connections,
     ...(options.settings === undefined ? {} : { settings: options.settings }),
@@ -52,6 +60,14 @@ export function world(
       confirms.push({ spec, writesBefore: writes().length });
       return options.confirm ?? true;
     },
+    ...(choose === undefined
+      ? {}
+      : {
+          chooseMail: async (spec) => {
+            chooses.push({ spec, writesBefore: writes().length });
+            return choose;
+          },
+        }),
   });
   const stop = activate(fake.api);
 
@@ -69,5 +85,5 @@ export function world(
     return tool.call(args, ctx);
   };
 
-  return { gmail, connections, fake, call, stop, confirms, writes };
+  return { gmail, connections, fake, call, stop, confirms, chooses, writes };
 }

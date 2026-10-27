@@ -61,7 +61,17 @@ Changes, each after a confirm card:
 | `gmail_archive` `{ thread_ids }` | Takes threads out of the inbox |
 | `gmail_mark` `{ thread_ids, read }` | Marks threads read (default) or unread |
 | `gmail_trash` `{ thread_ids }` | Moves threads to the trash |
-| `gmail_api` `{ method, path, query, body }` | Any Gmail REST call below `gmail/v1/users/me`; a GET runs at once, any other method shows the exact request first (a `raw` mail decoded) |
+| `gmail_api` `{ method, path, query, body }` | Any Gmail REST call below `gmail/v1/users/me`; a GET runs at once, any other method shows the exact request first (a `raw` mail decoded). It never sends: a path ending in `send` (`/messages/send`, `/drafts/send`) is refused without a card |
+
+The five mail tools (`gmail_draft_reply`, `gmail_new_draft`, `gmail_send`,
+`gmail_reply`, `gmail_forward`) only propose a mail. Where prifly has the
+two-way mail card (`api.features` has "choose-mail", extension API v0.10.0),
+the reader chooses there to save it as a draft or send it now, whatever the
+tool is called, and the tool's answer says which they chose ("The reader
+saved it as a draft: …" / "The reader sent it: …"); Cancel writes nothing. A
+`gmail_draft_reply` with `replace_draft_id` that the reader sends is updated
+and then sent through `drafts/send`, so it leaves Drafts and goes out once. On
+an older prifly the confirm card does what the tool's name says.
 
 ### Pictures and files in a mail
 

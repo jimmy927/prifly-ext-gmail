@@ -118,8 +118,10 @@ export type FakeGmail = {
   throttle: { status: number; retryAfter: string; times: number };
   /** How many requests the fake got, throttled ones included. */
   hits: () => number;
-  /** Every mail sent through /messages/send, in order. */
+  /** Every mail sent through /messages/send or /drafts/send, in order. */
   sent: { raw: string; threadId?: string }[];
+  /** The ids of the drafts sent through /drafts/send, in order. */
+  draftsSent: string[];
   /** Every draft message and sent mail by message id, as raw, to read back with `format=full`. */
   messages: Map<string, { raw: string; threadId: string }>;
   /** While `on`, a stored mail reads back without its pictures and files, as if Gmail dropped them. */
@@ -190,6 +192,23 @@ function storedMessage(messages: FakeGmail["messages"], id: string, lose: boolea
   return Response.json({ id, threadId: stored.threadId, labelIds: [], payload: shown });
 }
 
+type Outgoing = { raw: string; threadId?: string };
+
+/** POST /drafts/send: the draft as saved goes out through `send` and leaves Drafts. */
+async function sendDraft(
+  request: Request,
+  drafts: FakeGmail["drafts"],
+  draftsSent: string[],
+  send: (message: Outgoing) => Response,
+): Promise<Response> {
+  const { id } = (await request.json()) as { id: string };
+  const draft = drafts.get(id);
+  if (draft === undefined) return new Response("no draft", { status: 404 });
+  drafts.delete(id);
+  draftsSent.push(id);
+  return send(draft.message);
+}
+
 function readThread(threads: Map<string, Json[]>, id: string, url: URL): Response {
   const messages = threads.get(id);
   if (messages === undefined) return new Response("not found", { status: 404 });
@@ -208,6 +227,7 @@ export function fakeGmail(): FakeGmail {
   ]);
   const drafts = new Map<string, StoredDraft>();
   const sent: FakeGmail["sent"] = [];
+  const draftsSent: string[] = [];
   const messages: FakeGmail["messages"] = new Map();
   const loseFiles = { on: false };
   const trashed: string[] = [];
@@ -243,6 +263,7 @@ export function fakeGmail(): FakeGmail {
       ["POST", /^\/drafts$/, () => writeDraft(request, undefined)],
       ["PUT", /^\/drafts\/([^/]+)$/, (found) => writeDraft(request, found[1])],
       ["POST", /^\/messages\/send$/, () => sendMessage(request)],
+      ["POST", /^\/drafts\/send$/, () => sendDraft(request, drafts, draftsSent, sendStored)],
       ["POST", /^\/threads\/([^/]+)\/modify$/, (found) => modifyThread(found[1] ?? "", request)],
       ["POST", /^\/threads\/([^/]+)\/trash$/, (found) => trashThread(found[1] ?? "")],
     ];
@@ -287,17 +308,15 @@ export function fakeGmail(): FakeGmail {
     return Response.json(labels.get(id));
   };
 
-  const sendMessage = async (request: Request): Promise<Response> => {
-    const message = (await request.json()) as { raw: string; threadId?: string };
+  const sendMessage = async (request: Request): Promise<Response> =>
+    sendStored((await request.json()) as Outgoing);
+
+  const sendStored = (message: Outgoing): Response => {
     sent.push(message);
     const id = `s${++sentCount}`;
     const threadId = message.threadId ?? `ts${sentCount}`;
     messages.set(id, { raw: message.raw, threadId });
-    return Response.json({
-      id,
-      threadId,
-      labelIds: ["SENT"],
-    });
+    return Response.json({ id, threadId, labelIds: ["SENT"] });
   };
 
   const modifyThread = async (id: string, request: Request): Promise<Response> => {
@@ -338,6 +357,7 @@ export function fakeGmail(): FakeGmail {
     throttle,
     hits: () => hits,
     sent,
+    draftsSent,
     messages,
     loseFiles,
     labels,

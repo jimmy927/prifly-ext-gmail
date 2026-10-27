@@ -77,6 +77,8 @@ export type GmailClient = {
   createDraft(raw: string, threadId?: string): Promise<GmailResult<Draft>>;
   updateDraft(draftId: string, raw: string, threadId?: string): Promise<GmailResult<Draft>>;
   sendMessage(raw: string, threadId?: string): Promise<GmailResult<Sent>>;
+  /** Sends a saved draft as it stands; Gmail then takes it out of Drafts. */
+  sendDraft(draftId: string): Promise<GmailResult<Sent>>;
   createLabel(name: string): Promise<GmailResult<Label>>;
   modifyThread(id: string, add: string[], remove: string[]): Promise<GmailResult<null>>;
   trashThread(id: string): Promise<GmailResult<null>>;
@@ -286,6 +288,11 @@ export function gmailClient(options: GmailClientOptions): GmailClient {
     async sendMessage(raw, threadId) {
       const payload = threadId === undefined || threadId === "" ? { raw } : { raw, threadId };
       const got = await json("/messages/send", body("POST", payload));
+      return got.ok ? { ok: true, value: idPair(got.value) } : got;
+    },
+
+    async sendDraft(draftId) {
+      const got = await json("/drafts/send", body("POST", { id: draftId }));
       return got.ok ? { ok: true, value: idPair(got.value) } : got;
     },
 

@@ -1,7 +1,8 @@
 /**
  * The whole Gmail API, for what the curated tools do not cover: `gmail_api`
  * makes any call below users/me with the reader's connection (a GET at once,
- * anything else only after the reader confirms the exact request), and
+ * anything else only after the reader confirms the exact request, and never
+ * a send: mail goes out only from the reader's Send on a mail card), and
  * `gmail_api_docs` reads Gmail's own reference to find the call to make.
  */
 
@@ -27,6 +28,27 @@ export function userPath(given: string): string | null {
   const outside = ["://", "..", "?", "#"].some((each) => path.includes(each));
   if (outside || path === "" || path === "/") return null;
   return path.startsWith("/") ? path : `/${path}`;
+}
+
+export const NO_SEND =
+  "gmail_api does not send mail. Use gmail_send, gmail_reply or gmail_forward: the reader chooses Send or Save as draft on their card.";
+
+/**
+ * Whether a path (as a session wrote it, query and trailing slashes too) is
+ * one of Gmail's send methods, /messages/send or /drafts/send: whatever its
+ * method, gmail_api never makes such a call, so mail only goes out from the
+ * reader's Send on a mail card.
+ */
+export function isSendPath(given: string): boolean {
+  const path = given.trim().split(/[?#]/)[0] ?? "";
+  const last = path.replace(/\/+$/, "").split("/").at(-1) ?? "";
+  let decoded = last;
+  try {
+    decoded = decodeURIComponent(last);
+  } catch {
+    // A broken escape is not "send"; userPath and Gmail judge the rest.
+  }
+  return decoded.toLowerCase() === "send";
 }
 
 /** The query as URL parameters: each value a string, number or boolean, or a list of them. */
@@ -63,6 +85,7 @@ function answerText(method: string, answer: string): string {
 async function callApi(getApi: () => ExtensionApi | null, args: Args): Promise<string> {
   const method = (text(args, "method") || "GET").toUpperCase();
   if (!METHODS.includes(method)) return `method must be one of ${METHODS.join(", ")}.`;
+  if (isSendPath(text(args, "path"))) return NO_SEND;
   const path = userPath(text(args, "path"));
   if (path === null) {
     return "path must be a path below gmail/v1/users/me, like /messages or /labels/INBOX, with the query in `query`.";
@@ -88,7 +111,7 @@ export function apiTool(getApi: () => ExtensionApi | null): ExtensionTool {
   return {
     name: "gmail_api",
     description:
-      "Calls any Gmail REST method below gmail/v1/users/me with the reader's account, for what the other gmail_ tools do not do (filters, settings, history, single messages…). See gmail_api_docs for the methods. A GET runs at once; any other method shows the reader the exact request on a confirm card first. Answers Gmail's JSON.",
+      "Calls any Gmail REST method below gmail/v1/users/me with the reader's account, for what the other gmail_ tools do not do (filters, settings, history, single messages…). See gmail_api_docs for the methods. A GET runs at once; any other method shows the reader the exact request on a confirm card first. Answers Gmail's JSON. It never sends mail: a send path (/messages/send, /drafts/send) is refused without a card. To send, propose the mail with gmail_send, gmail_reply or gmail_forward, where the reader chooses Send or Save as draft.",
     inputSchema: schema(
       {
         method: { type: "string", description: "GET (default), POST, PUT, PATCH or DELETE." },

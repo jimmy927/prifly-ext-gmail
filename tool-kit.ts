@@ -1,10 +1,11 @@
 /**
  * What every Gmail tool shares: reading its arguments, the `account`
- * argument, picking the connection, and the confirm card every write waits
- * for. A write that is not confirmed sends nothing and says so.
+ * argument, picking the connection, and the card every write waits for (for
+ * a mail, the card where the reader chooses draft or send). A write that is
+ * not confirmed sends nothing and says so.
  */
 
-import type { ConfirmSpec, ExtensionApi } from "@prifly/extension-api";
+import type { ConfirmMail, ConfirmSpec, ExtensionApi } from "@prifly/extension-api";
 import { NO_CONNECTION, pickConnection } from "./connection";
 import { type GmailClient, gmailClient } from "./gmail";
 
@@ -81,4 +82,39 @@ export async function withGmail(
 export async function confirmFirst(api: ExtensionApi, spec: ConfirmSpec): Promise<string | null> {
   if (api.confirm === undefined) return NO_CONFIRM;
   return (await api.confirm(spec)) ? null : CANCELLED;
+}
+
+/** What becomes of a mail: saved in Drafts, or sent. */
+export type MailKind = "draft" | "send";
+
+/** What a mail tool does, and whether the reader chose it on a two-way card (else the tool's name said it). */
+export type MailChoice = { kind: MailKind; chosen: boolean };
+
+/** prifly's two-way mail card (extension API v0.10.0), not yet in the API types this builds against. */
+type ChooseMail = (spec: ConfirmSpec & { mail: ConfirmMail }) => Promise<MailKind | null>;
+
+/**
+ * Asks the reader about a mail. Where prifly has the two-way card
+ * ("choose-mail"), it shows `card`'s neutral title and summary over the mail
+ * and the reader picks Save as draft or Send now, whatever the tool is
+ * called. An older prifly shows `spec` on a confirm card, and confirming does
+ * `kind`, what the tool's name says. Answers the choice, or the text the
+ * tool answers instead of writing.
+ */
+export async function askMail(
+  api: ExtensionApi,
+  spec: ConfirmSpec & { mail: ConfirmMail },
+  kind: MailKind,
+  card: { title: string; summary: string },
+): Promise<MailChoice | string> {
+  const choose = (api as ExtensionApi & { chooseMail?: ChooseMail }).chooseMail;
+  if (api.features?.includes("choose-mail") && choose !== undefined) {
+    const chosen = await choose.call(api, {
+      ...spec,
+      ...card,
+      mail: { ...spec.mail, draft: false },
+    });
+    return chosen === null ? CANCELLED : { kind: chosen, chosen: true };
+  }
+  return (await confirmFirst(api, spec)) ?? { kind, chosen: false };
 }

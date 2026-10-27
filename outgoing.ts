@@ -225,7 +225,7 @@ export type MailEnvelope = {
   cc: string;
   bcc: string;
   subject: string;
-  /** True for the draft tools, which only save. */
+  /** True for the draft tools, which only save on a confirm card; the two-way card sets it false. */
   draft: boolean;
 };
 

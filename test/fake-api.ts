@@ -11,6 +11,7 @@
  */
 
 import type {
+  ConfirmMail,
   ConfirmSpec,
   Decoration,
   ExtensionApi,
@@ -174,6 +175,11 @@ export type FakeApi = {
   statuses: string[];
 };
 
+/** prifly's two-way mail card (extension API v0.10.0), not yet in the API types. */
+export type FakeChooseMail = (
+  spec: ConfirmSpec & { mail: ConfirmMail },
+) => Promise<"draft" | "send" | null>;
+
 /** A fake `api`; parts left out of `options` are prifly's quiet defaults. */
 export function fakeApi(
   options: {
@@ -182,6 +188,8 @@ export function fakeApi(
     folder?: string;
     /** Answers `api.confirm`; left out, every confirm is a Cancel. */
     confirm?: (spec: ConfirmSpec) => Promise<boolean>;
+    /** Answers `api.chooseMail`, and `features` then has "choose-mail"; left out, a prifly without it. */
+    chooseMail?: FakeChooseMail;
   } = {},
 ): FakeApi {
   let tools: ExtensionTool[] = [];
@@ -224,6 +232,12 @@ export function fakeApi(
     dialog: async () => null,
     openUrl: async () => false,
   };
+  if (options.chooseMail !== undefined) {
+    Object.assign(api, {
+      features: [...(api.features ?? []), "choose-mail"],
+      chooseMail: options.chooseMail,
+    });
+  }
   const callTool: FakeApi["callTool"] = (name, args, pick = null) => {
     const tool = tools.find((each) => each.name === name);
     if (tool === undefined) throw new Error(`No tool ${name} registered`);

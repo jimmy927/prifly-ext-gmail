@@ -1,8 +1,10 @@
 /**
- * The tools that write mail: drafts (a new one, or a reply inside a thread)
- * and sending (a new mail, a reply in its thread, a forward). Each reads what
- * it needs first, then shows the reader exactly what will be written or sent
- * on a confirm card, and only then writes.
+ * The tools that write mail: a new mail, a reply inside a thread, a forward.
+ * Each reads what it needs first, then shows the reader exactly the mail on a
+ * card, and only then writes. Where prifly has the two-way mail card, the
+ * reader chooses there whether it is saved as a draft or sent, whatever the
+ * tool is called; an older prifly's confirm card does what the tool's name
+ * says.
  */
 
 import type { ExtensionApi, ExtensionTool } from "@prifly/extension-api";
@@ -37,13 +39,32 @@ import {
 } from "./outgoing";
 import {
   type Args,
-  confirmFirst,
+  askMail,
+  type MailChoice,
   type Session,
   schema,
   text,
   untrimmed,
   withGmail,
 } from "./tool-kit";
+
+/** What every compose tool's description ends with: who decides, and that there is no other way. */
+const READER_DECIDES =
+  "The reader sees the mail on a card and chooses there to save it as a draft or send it now, whatever this tool is called; the answer says which they chose (an older prifly's card only confirms what the tool's name says). Never try another way to send mail.";
+
+/** How the answer opens when the reader chose on the two-way card. */
+const SAVED_BY_READER = "The reader saved it as a draft: ";
+const SENT_BY_READER = "The reader sent it: ";
+
+/** The answer as is when the tool's name said what to do; else led by what the reader chose. */
+const told = (choice: MailChoice, answer: string): string =>
+  choice.chosen ? `${choice.kind === "draft" ? SAVED_BY_READER : SENT_BY_READER}${answer}` : answer;
+
+/** A two-way card's summary: the mail and who it is for, its pictures and files, and the two ways. */
+const choiceSummary = (mail: string, content: Pick<MailContent, "images" | "files">): string => {
+  const extras = extrasText(content);
+  return `${mail}${extras === "" ? "" : `,${extras}`}. Save it in Drafts, or send it now.`;
+};
 
 const envelopeHeaders = (envelope: ReplyEnvelope): [string, string][] => [
   ["To", envelope.to],
@@ -63,6 +84,15 @@ const replyCard = (plan: ReplyPlan, account: string, draft: boolean): MailEnvelo
   draft,
 });
 
+/** The two-way card's title and summary for a reply, the same from either reply tool. */
+const replyChoice = (plan: ReplyPlan, content: MailContent, replace: string) => ({
+  title: "Reply in the thread",
+  summary: choiceSummary(
+    `“${plan.envelope.subject}” to ${listForPeople(plan.envelope.to)}, in the thread${replace === "" ? "" : ` in place of draft ${replace}`}`,
+    content,
+  ),
+});
+
 /** Reads the thread and works out who a reply goes to, or why it cannot be answered. */
 async function planReply(
   client: GmailClient,
@@ -78,11 +108,52 @@ async function planReply(
   return { envelope, subject: first === undefined ? "" : readMessage(first.payload).subject };
 }
 
+/** A reply ready to write: its plan, thread, raw mail, content, and the draft it replaces ("" for none). */
+type Reply = {
+  plan: ReplyPlan;
+  threadId: string;
+  raw: string;
+  content: MailContent;
+  replace: string;
+};
+
+/**
+ * Writes a reply as the reader chose: a draft under the thread's last
+ * message (rewriting `replace` when given), or sent in the thread. A draft
+ * that is sent is updated first and then sent itself, so it leaves Drafts and
+ * goes out once.
+ */
+async function writeReply(client: GmailClient, reply: Reply, choice: MailChoice): Promise<string> {
+  const { plan, threadId, raw, content, replace } = reply;
+  if (choice.kind === "send" && replace === "") {
+    return await sentAnswer(client, await client.sendMessage(raw, threadId), content, choice);
+  }
+  const made =
+    replace === ""
+      ? await client.createDraft(raw, threadId)
+      : await client.updateDraft(replace, raw, threadId);
+  if (!made.ok) return failureText(made);
+  if (choice.kind === "send") {
+    return await sentAnswer(client, await client.sendDraft(made.value.id), content, choice);
+  }
+  const broken = await brokenCopy(
+    client,
+    "Saved",
+    `draft ${made.value.id}`,
+    made.value.messageId,
+    content,
+  );
+  return told(
+    choice,
+    broken ??
+      `Draft ${made.value.id} is in the thread “${plan.subject}” in Gmail: open the thread to see it under the last message.`,
+  );
+}
+
 function draftReplyTool(getApi: () => ExtensionApi | null): ExtensionTool {
   return {
     name: "gmail_draft_reply",
-    description:
-      "Writes a draft reply inside a Gmail thread, threaded under its last message; `all` (default true) also keeps everyone else on Cc. Local files can be attached and pictures shown inline (inline_images, each at an [image:name] line of the body); such a draft survives being opened and sent from Gmail's web editor. Pass replace_draft_id to change an earlier draft instead of adding a second. The reader confirms on a card first; nothing is sent.",
+    description: `Proposes a reply inside a Gmail thread, threaded under its last message; \`all\` (default true) also keeps everyone else on Cc. Local files can be attached and pictures shown inline (inline_images, each at an [image:name] line of the body); such a draft survives being opened and sent from Gmail's web editor. Pass replace_draft_id to change an earlier draft instead of adding a second (sent, that draft goes out once and leaves Drafts). ${READER_DECIDES}`,
     inputSchema: schema(
       {
         thread_id: { type: "string" },
@@ -108,33 +179,53 @@ async function draftReply(args: Args, { api, client, account }: Session): Promis
   const plan = await planReply(client, account, id, args["all"] !== false);
   if (typeof plan === "string") return plan;
   const replace = text(args, "replace_draft_id");
-  const refused = await confirmFirst(api, {
-    title: replace === "" ? "Write a draft reply" : "Rewrite a draft reply",
-    summary: `Draft a reply to “${plan.subject}” for ${listForPeople(plan.envelope.to)}, in the thread${extrasText(content)}. Nothing is sent.`,
-    details: mailDetails(envelopeHeaders(plan.envelope), content, body),
-    mail: cardMail(replyCard(plan, account, true), content, content.text),
-  });
-  if (refused !== null) return refused;
-  const raw = rawReply(plan.envelope, content.text, content.files, content.rich);
-  const made =
-    replace === "" ? await client.createDraft(raw, id) : await client.updateDraft(replace, raw, id);
-  if (!made.ok) return failureText(made);
-  const broken = await brokenCopy(
-    client,
-    "Saved",
-    `draft ${made.value.id}`,
-    made.value.messageId,
-    content,
+  const choice = await askMail(
+    api,
+    {
+      title: replace === "" ? "Write a draft reply" : "Rewrite a draft reply",
+      summary: `Draft a reply to “${plan.subject}” for ${listForPeople(plan.envelope.to)}, in the thread${extrasText(content)}. Nothing is sent.`,
+      details: mailDetails(envelopeHeaders(plan.envelope), content, body),
+      mail: cardMail(replyCard(plan, account, true), content, content.text),
+    },
+    "draft",
+    replyChoice(plan, content, replace),
   );
-  if (broken !== null) return broken;
-  return `Draft ${made.value.id} is in the thread “${plan.subject}” in Gmail: open the thread to see it under the last message.`;
+  if (typeof choice === "string") return choice;
+  const raw = rawReply(plan.envelope, content.text, content.files, content.rich);
+  return await writeReply(client, { plan, threadId: id, raw, content, replace }, choice);
 }
+
+/** Writes a new mail (not a reply) as the reader chose: a draft in Gmail's Drafts, or sent. */
+async function writeNew(
+  client: GmailClient,
+  raw: string,
+  content: MailContent,
+  choice: MailChoice,
+): Promise<string> {
+  if (choice.kind === "send") {
+    return await sentAnswer(client, await client.sendMessage(raw), content, choice);
+  }
+  const made = await client.createDraft(raw);
+  if (!made.ok) return failureText(made);
+  const what = `draft ${made.value.id}`;
+  const broken = await brokenCopy(client, "Saved", what, made.value.messageId, content);
+  return told(
+    choice,
+    broken ??
+      `Draft ${made.value.id} is in Gmail's Drafts: open Drafts to see it. Nothing was sent.`,
+  );
+}
+
+/** The two-way card's title and summary for a new mail, the same from either tool. */
+const newChoice = (mail: { to: string; subject: string }, content: MailContent) => ({
+  title: "Write an email",
+  summary: choiceSummary(`“${mail.subject}” to ${listForPeople(mail.to)}`, content),
+});
 
 function newDraftTool(getApi: () => ExtensionApi | null): ExtensionTool {
   return {
     name: "gmail_new_draft",
-    description:
-      "Writes a new draft mail (not a reply) in Gmail's Drafts. Local files can be attached and pictures shown inline (inline_images, each at an [image:name] line of the body); such a draft survives being opened and sent from Gmail's web editor. The reader confirms on a card first; nothing is sent.",
+    description: `Proposes a new mail (not a reply). Local files can be attached and pictures shown inline (inline_images, each at an [image:name] line of the body); such a draft survives being opened and sent from Gmail's web editor. ${READER_DECIDES}`,
     inputSchema: schema(
       {
         to: { type: "string", description: "Addresses, separated by commas." },
@@ -158,19 +249,19 @@ async function newDraft(args: Args, { api, client, account }: Session): Promise<
   const content = await mailContent(args, body);
   if (typeof content === "string") return content;
   const mail = { to, cc: text(args, "cc"), subject: text(args, "subject"), body: content.text };
-  const refused = await confirmFirst(api, {
-    title: "Write a draft",
-    summary: `Draft “${mail.subject}” to ${listForPeople(to)} in Gmail's Drafts${extrasText(content)}. Nothing is sent.`,
-    details: mailDetails(newHeaders(mail), content, body),
-    mail: cardMail({ account, ...mail, bcc: "", draft: true }, content, content.text),
-  });
-  if (refused !== null) return refused;
-  const made = await client.createDraft(buildNew(mail, content.files, content.rich));
-  if (!made.ok) return failureText(made);
-  const what = `draft ${made.value.id}`;
-  const broken = await brokenCopy(client, "Saved", what, made.value.messageId, content);
-  if (broken !== null) return broken;
-  return `Draft ${made.value.id} is in Gmail's Drafts: open Drafts to see it. Nothing was sent.`;
+  const choice = await askMail(
+    api,
+    {
+      title: "Write a draft",
+      summary: `Draft “${mail.subject}” to ${listForPeople(to)} in Gmail's Drafts${extrasText(content)}. Nothing is sent.`,
+      details: mailDetails(newHeaders(mail), content, body),
+      mail: cardMail({ account, ...mail, bcc: "", draft: true }, content, content.text),
+    },
+    "draft",
+    newChoice(mail, content),
+  );
+  if (typeof choice === "string") return choice;
+  return await writeNew(client, buildNew(mail, content.files, content.rich), content, choice);
 }
 
 type Outgoing = { to: string; cc: string; bcc: string; subject: string; body: string };
@@ -182,14 +273,10 @@ const newHeaders = (mail: Omit<Outgoing, "bcc"> & { bcc?: string }): [string, st
   ["Subject", mail.subject],
 ];
 
-const sentText = (id: string, threadId: string): string =>
-  `Sent: message ${id} in thread ${threadId}.`;
-
 function sendTool(getApi: () => ExtensionApi | null): ExtensionTool {
   return {
     name: "gmail_send",
-    description:
-      "Sends a new mail (not a reply), with local files attached and pictures shown inline (inline_images, each at an [image:name] line of the body) if given. The reader confirms on a card showing the recipients, subject, text, pictures and files first.",
+    description: `Proposes a new mail (not a reply) to send, with local files attached and pictures shown inline (inline_images, each at an [image:name] line of the body) if given. The card shows the recipients, subject, text, pictures and files. ${READER_DECIDES}`,
     inputSchema: schema(
       {
         to: { type: "string", description: "Addresses, separated by commas." },
@@ -218,17 +305,20 @@ async function sendNew(args: Args, { api, client, account }: Session): Promise<s
   if (mail.to === "" || mail.body.trim() === "") return "to and body are required.";
   const content = await mailContent(args, mail.body);
   if (typeof content === "string") return content;
-  const refused = await confirmFirst(api, {
-    title: "Send an email",
-    summary: `Send “${mail.subject}” to ${listForPeople(mail.to)}${extrasText(content)}`,
-    details: mailDetails(newHeaders(mail), content, mail.body),
-    mail: cardMail({ account, ...mail, draft: false }, content, content.text),
-  });
-  if (refused !== null) return refused;
-  const sent = await client.sendMessage(
-    buildNew({ ...mail, body: content.text }, content.files, content.rich),
+  const choice = await askMail(
+    api,
+    {
+      title: "Send an email",
+      summary: `Send “${mail.subject}” to ${listForPeople(mail.to)}${extrasText(content)}`,
+      details: mailDetails(newHeaders(mail), content, mail.body),
+      mail: cardMail({ account, ...mail, draft: false }, content, content.text),
+    },
+    "send",
+    newChoice(mail, content),
   );
-  return await sentAnswer(client, sent, content);
+  if (typeof choice === "string") return choice;
+  const raw = buildNew({ ...mail, body: content.text }, content.files, content.rich);
+  return await writeNew(client, raw, content, choice);
 }
 
 /** The answer for a send: the ids, or the error when Gmail's sent copy lost a picture or file. */
@@ -236,18 +326,19 @@ async function sentAnswer(
   client: GmailClient,
   sent: GmailResult<Sent>,
   content: MailContent,
+  choice: MailChoice,
 ): Promise<string> {
   if (!sent.ok) return failureText(sent);
   const what = `message ${sent.value.id} in thread ${sent.value.threadId}`;
   const broken = await brokenCopy(client, "Sent", what, sent.value.id, content);
-  return broken ?? sentText(sent.value.id, sent.value.threadId);
+  if (broken !== null) return told(choice, broken);
+  return choice.chosen ? told(choice, `${what}.`) : `Sent: ${what}.`;
 }
 
 function replyTool(getApi: () => ExtensionApi | null): ExtensionTool {
   return {
     name: "gmail_reply",
-    description:
-      "Sends a reply in a Gmail thread, to its last message; `all` (default true) keeps everyone else on Cc. Local files are attached and pictures shown inline (inline_images, each at an [image:name] line of the body) if given. The reader confirms on a card showing the recipients, subject, text, pictures and files first.",
+    description: `Proposes a reply in a Gmail thread to send, to its last message; \`all\` (default true) keeps everyone else on Cc. Local files are attached and pictures shown inline (inline_images, each at an [image:name] line of the body) if given. The card shows the recipients, subject, text, pictures and files. ${READER_DECIDES}`,
     inputSchema: schema(
       {
         thread_id: { type: "string" },
@@ -271,15 +362,20 @@ async function sendReply(args: Args, { api, client, account }: Session): Promise
   if (typeof content === "string") return content;
   const plan = await planReply(client, account, id, args["all"] !== false);
   if (typeof plan === "string") return plan;
-  const refused = await confirmFirst(api, {
-    title: "Send a reply",
-    summary: `Reply to “${plan.subject}”, sent to ${listForPeople(plan.envelope.to)}${extrasText(content)}`,
-    details: mailDetails(envelopeHeaders(plan.envelope), content, body),
-    mail: cardMail(replyCard(plan, account, false), content, content.text),
-  });
-  if (refused !== null) return refused;
+  const choice = await askMail(
+    api,
+    {
+      title: "Send a reply",
+      summary: `Reply to “${plan.subject}”, sent to ${listForPeople(plan.envelope.to)}${extrasText(content)}`,
+      details: mailDetails(envelopeHeaders(plan.envelope), content, body),
+      mail: cardMail(replyCard(plan, account, false), content, content.text),
+    },
+    "send",
+    replyChoice(plan, content, ""),
+  );
+  if (typeof choice === "string") return choice;
   const raw = rawReply(plan.envelope, content.text, content.files, content.rich);
-  return await sentAnswer(client, await client.sendMessage(raw, id), content);
+  return await writeReply(client, { plan, threadId: id, raw, content, replace: "" }, choice);
 }
 
 /** The message to forward: the one asked for, else the thread's last sent one. */
@@ -327,21 +423,28 @@ async function forward(args: Args, { api, client, account }: Session): Promise<s
     subject: forwardSubject(readMessage(message.payload).subject),
     body: forwardBody(untrimmed(args, "note"), message),
   };
-  const refused = await confirmFirst(api, {
-    title: "Forward an email",
-    summary: `Forward “${mail.subject}” to ${listForPeople(to)}`,
-    details: mailDetails(newHeaders(mail), content, mail.body),
-    mail: cardMail({ account, ...mail, draft: false }, content, mail.body),
-  });
-  if (refused !== null) return refused;
-  return await sentAnswer(client, await client.sendMessage(buildNew(mail, files)), content);
+  const choice = await askMail(
+    api,
+    {
+      title: "Forward an email",
+      summary: `Forward “${mail.subject}” to ${listForPeople(to)}`,
+      details: mailDetails(newHeaders(mail), content, mail.body),
+      mail: cardMail({ account, ...mail, draft: false }, content, mail.body),
+    },
+    "send",
+    {
+      title: "Forward an email",
+      summary: choiceSummary(`“${mail.subject}” to ${listForPeople(to)}`, content),
+    },
+  );
+  if (typeof choice === "string") return choice;
+  return await writeNew(client, buildNew(mail, files), content, choice);
 }
 
 function forwardTool(getApi: () => ExtensionApi | null): ExtensionTool {
   return {
     name: "gmail_forward",
-    description:
-      "Forwards a message of a Gmail thread (its last one, or message_id) with a note on top, its own attachments (unless include_attachments is false) and any local files. The reader confirms on a card showing the recipients, subject, text and files first.",
+    description: `Proposes forwarding a message of a Gmail thread (its last one, or message_id) with a note on top, its own attachments (unless include_attachments is false) and any local files. The card shows the recipients, subject, text and files. ${READER_DECIDES}`,
     inputSchema: schema(
       {
         thread_id: { type: "string" },
