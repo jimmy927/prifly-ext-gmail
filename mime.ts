@@ -448,7 +448,8 @@ function decodeEncodedWords(value: string): string {
                 ),
               "latin1",
             );
-      return new TextDecoder(charset.replace(/\*.*$/, "")).decode(bytes);
+      // An unknown label throws, and the catch keeps the word as written.
+      return new TextDecoder(charset.replace(/\*.*$/, "") as "utf-8").decode(bytes);
     } catch {
       return whole;
     }
