@@ -430,6 +430,43 @@ export function listOrRaw(value: string): string {
   return boxes.length > 0 ? formatList(boxes) : value.trim();
 }
 
+/** Decodes RFC 2047 encoded-words (B and Q; UTF-8, ISO-8859-1 and the like); other text is kept. */
+function decodeEncodedWords(value: string): string {
+  const word = /=\?([^?\s]+)\?([BbQq])\?([^?\s]*)\?=/g;
+  // Whitespace between two adjacent encoded-words is not part of the text.
+  const joined = value.replace(/(\?=)\s+(?==\?)/g, "$1");
+  return joined.replace(word, (whole, charset: string, kind: string, data: string) => {
+    try {
+      const bytes =
+        kind.toUpperCase() === "B"
+          ? Buffer.from(data, "base64")
+          : Buffer.from(
+              data
+                .replace(/_/g, " ")
+                .replace(/=([0-9A-Fa-f]{2})/g, (_, hex: string) =>
+                  String.fromCharCode(Number.parseInt(hex, 16)),
+                ),
+              "latin1",
+            );
+      return new TextDecoder(charset.replace(/\*.*$/, "")).decode(bytes);
+    } catch {
+      return whole;
+    }
+  });
+}
+
+/** An address list for people to read: `Name <address>` in plain Unicode, encoded-words decoded. */
+export function listForPeople(value: string): string {
+  const boxes = parseAddresses(value);
+  if (boxes.length === 0) return decodeEncodedWords(value).trim();
+  return boxes
+    .map((box) => {
+      const name = decodeEncodedWords(box.name);
+      return name === "" ? box.address : `${name} <${box.address}>`;
+    })
+    .join(", ");
+}
+
 /** The raw (base64url RFC 822) text of a new mail. */
 export function buildNew(
   mail: NewMail,

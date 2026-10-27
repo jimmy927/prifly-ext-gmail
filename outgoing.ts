@@ -261,6 +261,7 @@ export function cardMail(
       filename: each.filename,
       mimeType: each.mimeType,
       size: each.bytes.length,
+      bytes: each.bytes,
     }));
   }
   return mail;

@@ -64,7 +64,12 @@ test("a reply's card mail carries its two images, its file and the HTML with cid
   }
   expect(html.indexOf(`cid:${shown[0]?.id}`)).toBeLessThan(html.indexOf(`cid:${shown[1]?.id}`));
   expect(mail?.attachments).toEqual([
-    { filename: "report.pdf", mimeType: "application/pdf", size: PDF_BYTES.length },
+    {
+      filename: "report.pdf",
+      mimeType: "application/pdf",
+      size: PDF_BYTES.length,
+      bytes: PDF_BYTES,
+    },
   ]);
   expect(mail?.text).not.toContain("cid:");
 });
@@ -98,4 +103,16 @@ test("a forward's card mail lists the original's attachments", async () => {
     "logo.png",
     "invoice.pdf",
   ]);
+});
+
+test("a new draft's summary shows the recipient's name in plain Unicode", async () => {
+  const w = started();
+  await w.call("gmail_new_draft", {
+    to: "Pär Dahlund <par.dahlund@clwork.se>",
+    subject: "Hej",
+    body: "Hi",
+  });
+  const summary = w.confirms[0]?.spec.summary ?? "";
+  expect(summary).toContain("Pär Dahlund <par.dahlund@clwork.se>");
+  expect(summary).not.toContain("=?");
 });

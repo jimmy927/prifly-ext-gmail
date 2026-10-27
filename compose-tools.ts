@@ -15,6 +15,7 @@ import {
   forwardBody,
   forwardSubject,
   lastSent,
+  listForPeople,
   listOrRaw,
   type ReplyEnvelope,
   rawReply,
@@ -109,7 +110,7 @@ async function draftReply(args: Args, { api, client, account }: Session): Promis
   const replace = text(args, "replace_draft_id");
   const refused = await confirmFirst(api, {
     title: replace === "" ? "Write a draft reply" : "Rewrite a draft reply",
-    summary: `Draft a reply to “${plan.subject}” for ${plan.envelope.to}, in the thread${extrasText(content)}. Nothing is sent.`,
+    summary: `Draft a reply to “${plan.subject}” for ${listForPeople(plan.envelope.to)}, in the thread${extrasText(content)}. Nothing is sent.`,
     details: mailDetails(envelopeHeaders(plan.envelope), content, body),
     mail: cardMail(replyCard(plan, account, true), content, content.text),
   });
@@ -159,7 +160,7 @@ async function newDraft(args: Args, { api, client, account }: Session): Promise<
   const mail = { to, cc: text(args, "cc"), subject: text(args, "subject"), body: content.text };
   const refused = await confirmFirst(api, {
     title: "Write a draft",
-    summary: `Draft “${mail.subject}” to ${listOrRaw(to)} in Gmail's Drafts${extrasText(content)}. Nothing is sent.`,
+    summary: `Draft “${mail.subject}” to ${listForPeople(to)} in Gmail's Drafts${extrasText(content)}. Nothing is sent.`,
     details: mailDetails(newHeaders(mail), content, body),
     mail: cardMail({ account, ...mail, bcc: "", draft: true }, content, content.text),
   });
@@ -219,7 +220,7 @@ async function sendNew(args: Args, { api, client, account }: Session): Promise<s
   if (typeof content === "string") return content;
   const refused = await confirmFirst(api, {
     title: "Send an email",
-    summary: `Send “${mail.subject}” to ${listOrRaw(mail.to)}${extrasText(content)}`,
+    summary: `Send “${mail.subject}” to ${listForPeople(mail.to)}${extrasText(content)}`,
     details: mailDetails(newHeaders(mail), content, mail.body),
     mail: cardMail({ account, ...mail, draft: false }, content, content.text),
   });
@@ -272,7 +273,7 @@ async function sendReply(args: Args, { api, client, account }: Session): Promise
   if (typeof plan === "string") return plan;
   const refused = await confirmFirst(api, {
     title: "Send a reply",
-    summary: `Reply to “${plan.subject}”, sent to ${plan.envelope.to}${extrasText(content)}`,
+    summary: `Reply to “${plan.subject}”, sent to ${listForPeople(plan.envelope.to)}${extrasText(content)}`,
     details: mailDetails(envelopeHeaders(plan.envelope), content, body),
     mail: cardMail(replyCard(plan, account, false), content, content.text),
   });
@@ -328,7 +329,7 @@ async function forward(args: Args, { api, client, account }: Session): Promise<s
   };
   const refused = await confirmFirst(api, {
     title: "Forward an email",
-    summary: `Forward “${mail.subject}” to ${listOrRaw(to)}`,
+    summary: `Forward “${mail.subject}” to ${listForPeople(to)}`,
     details: mailDetails(newHeaders(mail), content, mail.body),
     mail: cardMail({ account, ...mail, draft: false }, content, mail.body),
   });

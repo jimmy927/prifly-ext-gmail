@@ -7,6 +7,7 @@ import {
   encodeBase64url,
   encodeHeaderText,
   htmlToText,
+  listForPeople,
   parseAddresses,
   readMessage,
 } from "../mime";
@@ -167,4 +168,13 @@ test("a header value cannot start a new header", () => {
     buildNew({ to: "a@example.com", subject: "x\r\nBcc: evil@example.com", body: "b" }),
   );
   expect(headers.has("Bcc")).toBe(false);
+});
+
+test("listForPeople writes names in plain Unicode, decoding encoded-words", () => {
+  const plain = "Pär Dahlund <par.dahlund@clwork.se>";
+  expect(listForPeople(plain)).toBe(plain);
+  expect(listForPeople("=?UTF-8?B?UMOkciBEYWhsdW5k?= <par.dahlund@clwork.se>")).toBe(plain);
+  expect(
+    listForPeople("=?ISO-8859-1?Q?P=E4r_Dahlund?= <par.dahlund@clwork.se>, b@example.com"),
+  ).toBe(`${plain}, b@example.com`);
 });
