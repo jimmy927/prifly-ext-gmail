@@ -465,7 +465,7 @@ async function forward(args: Args, { api, client, account }: Session): Promise<s
   if (typeof final === "string") return final;
   const body = forwardBody(final.content.text, message);
   const raw = buildNew({ ...mail, subject: final.subject, body }, files);
-  return withEdit(choice, await writeNew(client, raw, content, choice));
+  return withEdit(choice, await writeNew(client, raw, final.content, choice));
 }
 
 function forwardTool(getApi: () => ExtensionApi | null): ExtensionTool {

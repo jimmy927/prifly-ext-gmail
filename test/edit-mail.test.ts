@@ -216,6 +216,29 @@ test("the editable card is preferred over the two-way card", async () => {
   expect(answer).toStartWith("The reader sent it: ");
 });
 
+test("a subject-only edit keeps the session's HTML and its picture", async () => {
+  const shot = join(temp, "shot.png");
+  await writeFile(shot, PNG_BYTES);
+  const w = started({ edit: reader("send", (card) => ({ ...card, subject: "Only the subject" })) });
+  await w.call("gmail_send", {
+    to: "x@example.com",
+    subject: "Pics",
+    body: "Plain alternative",
+    html: "<h1>Session HTML</h1>[image:shot]",
+    inline_images: [{ name: "shot", path: shot }],
+  });
+  const mail = written(w);
+  expect(headerValue(mail.headers, "Subject")).toBe("Only the subject");
+  expect(shape(mail)).toEqual([
+    "multipart/related",
+    ["multipart/alternative", "text/plain", "text/html"],
+    "image/png",
+  ]);
+  const alternative = mail.parts?.[0];
+  expect(textOf(alternative?.parts?.[0] as Payload)).toBe("Plain alternative");
+  expect(textOf(alternative?.parts?.[1] as Payload)).toStartWith("<h1>Session HTML</h1><img");
+});
+
 test("without the editable card, the two-way card then the confirm card are used as before", async () => {
   const two = started({ choose: "send" });
   expect(await two.call("gmail_send", COMPOSE[2]?.[1] ?? {})).toStartWith("The reader sent it: ");

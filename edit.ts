@@ -55,6 +55,8 @@ export function finalMail(
   if (!noteOnly && edit.text.trim() === "") {
     return "Not done: the reader emptied the body, so nothing was saved or sent.";
   }
+  // Only the subject changed: the session's body, HTML and pictures stay as they are.
+  if (edit.text === content.text) return { content, subject: edit.subject.trim() };
   const edited = editedContent(content, edit.text);
   return typeof edited === "string" ? edited : { content: edited, subject: edit.subject.trim() };
 }
