@@ -87,14 +87,32 @@ export async function confirmFirst(api: ExtensionApi, spec: ConfirmSpec): Promis
 /** What becomes of a mail: saved in Drafts, or sent. */
 export type MailKind = "draft" | "send";
 
-/** What a mail tool does, and whether the reader chose it on a two-way card (else the tool's name said it). */
-export type MailChoice = { kind: MailKind; chosen: boolean };
+/** What the reader changed of a mail on the editable card: its subject and plain text as they left them. */
+export type MailEdit = { subject: string; text: string };
+
+/**
+ * What a mail tool does, whether the reader chose it on a two-way card (else
+ * the tool's name said it), and what they edited there (only when they
+ * changed the subject or the text).
+ */
+export type MailChoice = { kind: MailKind; chosen: boolean; edit?: MailEdit };
 
 /** prifly's two-way mail card (extension API v0.10.0), not yet in the API types this builds against. */
 type ChooseMail = (spec: ConfirmSpec & { mail: ConfirmMail }) => Promise<MailKind | null>;
 
+/** prifly's editable mail card ("choose-mail-edit"): the two-way card with subject and text editable; null is Cancel. */
+type ChooseMailEdit = (
+  spec: ConfirmSpec & { mail: ConfirmMail },
+) => Promise<{ choice: MailKind; subject: string; text: string } | null>;
+
+/** prifly's editable confirm card ("confirm-edit"): `content` as editable text; null is Cancel. */
+export type ConfirmEdit = (spec: ConfirmSpec & { content: string }) => Promise<string | null>;
+
 /**
- * Asks the reader about a mail. Where prifly has the two-way card
+ * Asks the reader about a mail. Where prifly has the editable card
+ * ("choose-mail-edit"), the reader also edits the subject and text there, and
+ * the answer carries the edit when they changed either. Otherwise, where
+ * prifly has the two-way card
  * ("choose-mail"), it shows `card`'s neutral title and summary over the mail
  * and the reader picks Save as draft or Send now, whatever the tool is
  * called. An older prifly shows `spec` on a confirm card, and confirming does
@@ -107,6 +125,17 @@ export async function askMail(
   kind: MailKind,
   card: { title: string; summary: string },
 ): Promise<MailChoice | string> {
+  const editable = (api as ExtensionApi & { chooseMailEdit?: ChooseMailEdit }).chooseMailEdit;
+  if (api.features?.includes("choose-mail-edit") && editable !== undefined) {
+    const shown = { ...spec, ...card, mail: { ...spec.mail, draft: false } };
+    const chosen = await editable.call(api, shown);
+    if (chosen === null) return CANCELLED;
+    const { subject, text } = chosen;
+    const changed = subject !== spec.mail.subject || text !== spec.mail.text;
+    return changed
+      ? { kind: chosen.choice, chosen: true, edit: { subject, text } }
+      : { kind: chosen.choice, chosen: true };
+  }
   const choose = (api as ExtensionApi & { chooseMail?: ChooseMail }).chooseMail;
   if (api.features?.includes("choose-mail") && choose !== undefined) {
     const chosen = await choose.call(api, {

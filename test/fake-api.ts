@@ -180,6 +180,11 @@ export type FakeChooseMail = (
   spec: ConfirmSpec & { mail: ConfirmMail },
 ) => Promise<"draft" | "send" | null>;
 
+/** prifly's editable mail card (feature "choose-mail-edit"), not yet in the API types. */
+export type FakeChooseMailEdit = (
+  spec: ConfirmSpec & { mail: ConfirmMail },
+) => Promise<{ choice: "draft" | "send"; subject: string; text: string } | null>;
+
 /** A fake `api`; parts left out of `options` are prifly's quiet defaults. */
 export function fakeApi(
   options: {
@@ -190,6 +195,8 @@ export function fakeApi(
     confirm?: (spec: ConfirmSpec) => Promise<boolean>;
     /** Answers `api.chooseMail`, and `features` then has "choose-mail"; left out, a prifly without it. */
     chooseMail?: FakeChooseMail;
+    /** Answers `api.chooseMailEdit`, and `features` then has "choose-mail-edit". */
+    chooseMailEdit?: FakeChooseMailEdit;
   } = {},
 ): FakeApi {
   let tools: ExtensionTool[] = [];
@@ -236,6 +243,12 @@ export function fakeApi(
     Object.assign(api, {
       features: [...(api.features ?? []), "choose-mail"],
       chooseMail: options.chooseMail,
+    });
+  }
+  if (options.chooseMailEdit !== undefined) {
+    Object.assign(api, {
+      features: [...(api.features ?? []), "choose-mail-edit"],
+      chooseMailEdit: options.chooseMailEdit,
     });
   }
   const callTool: FakeApi["callTool"] = (name, args, pick = null) => {

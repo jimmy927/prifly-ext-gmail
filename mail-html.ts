@@ -91,6 +91,9 @@ function markerNames(text: string, onOwnLine: boolean): string[] {
   return [...text.matchAll(MARKER_ANY)].flatMap((found) => found[1] ?? []);
 }
 
+/** The image names the markers on a line of their own in `text` use, in order. */
+export const markedImageNames = (text: string): string[] => markerNames(text, true);
+
 /** Why the images and markers do not fit together, or null. */
 function markerProblem(
   names: string[],

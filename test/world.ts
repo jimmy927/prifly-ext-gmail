@@ -2,7 +2,7 @@
 
 import type { ConfirmSpec, ExtensionToolContext, SettingValues } from "@prifly/extension-api";
 import { activate } from "../index";
-import { type FakeAccount, fakeApi, fakeConnections } from "./fake-api";
+import { type FakeAccount, type FakeChooseMailEdit, fakeApi, fakeConnections } from "./fake-api";
 import { type FakeGmail, fakeGmail, SELF } from "./fake-gmail";
 
 export const SCOPES = [
@@ -39,6 +39,11 @@ export function world(
      * Cancel), prifly has "choose-mail"; left out, a prifly without it.
      */
     choose?: "draft" | "send" | null;
+    /**
+     * What the reader does on every editable mail card, given the mail the
+     * card shows (null for Cancel); given, prifly has "choose-mail-edit".
+     */
+    edit?: FakeChooseMailEdit;
   } = {},
 ) {
   const gmail: FakeGmail = fakeGmail();
@@ -51,7 +56,7 @@ export function world(
   const confirms: Shown[] = [];
   /** The two-way mail cards shown, apart from the confirm cards. */
   const chooses: Shown[] = [];
-  const { choose } = options;
+  const { choose, edit } = options;
   const fake = fakeApi({
     connections: connections.connections,
     ...(options.settings === undefined ? {} : { settings: options.settings }),
@@ -66,6 +71,14 @@ export function world(
           chooseMail: async (spec) => {
             chooses.push({ spec, writesBefore: writes().length });
             return choose;
+          },
+        }),
+    ...(edit === undefined
+      ? {}
+      : {
+          chooseMailEdit: async (spec) => {
+            chooses.push({ spec, writesBefore: writes().length });
+            return await edit(spec);
           },
         }),
   });

@@ -8,6 +8,7 @@
  */
 
 import type { ExtensionApi, ExtensionTool } from "@prifly/extension-api";
+import { finalMail, replyRaw, withEdit } from "./edit";
 import { failureText, type GmailClient, type GmailResult, type Sent } from "./gmail";
 import type { GmailMessage } from "./gmail-types";
 import {
@@ -20,7 +21,6 @@ import {
   listForPeople,
   listOrRaw,
   type ReplyEnvelope,
-  rawReply,
   readMessage,
   replyEnvelope,
 } from "./mime";
@@ -191,8 +191,13 @@ async function draftReply(args: Args, { api, client, account }: Session): Promis
     replyChoice(plan, content, replace),
   );
   if (typeof choice === "string") return choice;
-  const raw = rawReply(plan.envelope, content.text, content.files, content.rich);
-  return await writeReply(client, { plan, threadId: id, raw, content, replace }, choice);
+  const final = finalMail(content, plan.envelope.subject, choice);
+  if (typeof final === "string") return final;
+  const raw = replyRaw(plan.envelope, final);
+  return withEdit(
+    choice,
+    await writeReply(client, { plan, threadId: id, raw, content: final.content, replace }, choice),
+  );
 }
 
 /** Writes a new mail (not a reply) as the reader chose: a draft in Gmail's Drafts, or sent. */
@@ -261,7 +266,11 @@ async function newDraft(args: Args, { api, client, account }: Session): Promise<
     newChoice(mail, content),
   );
   if (typeof choice === "string") return choice;
-  return await writeNew(client, buildNew(mail, content.files, content.rich), content, choice);
+  const final = finalMail(content, mail.subject, choice);
+  if (typeof final === "string") return final;
+  const { content: out } = final;
+  const raw = buildNew({ ...mail, subject: final.subject, body: out.text }, out.files, out.rich);
+  return withEdit(choice, await writeNew(client, raw, out, choice));
 }
 
 type Outgoing = { to: string; cc: string; bcc: string; subject: string; body: string };
@@ -317,8 +326,11 @@ async function sendNew(args: Args, { api, client, account }: Session): Promise<s
     newChoice(mail, content),
   );
   if (typeof choice === "string") return choice;
-  const raw = buildNew({ ...mail, body: content.text }, content.files, content.rich);
-  return await writeNew(client, raw, content, choice);
+  const final = finalMail(content, mail.subject, choice);
+  if (typeof final === "string") return final;
+  const { content: out } = final;
+  const raw = buildNew({ ...mail, subject: final.subject, body: out.text }, out.files, out.rich);
+  return withEdit(choice, await writeNew(client, raw, out, choice));
 }
 
 /** The answer for a send: the ids, or the error when Gmail's sent copy lost a picture or file. */
@@ -374,8 +386,17 @@ async function sendReply(args: Args, { api, client, account }: Session): Promise
     replyChoice(plan, content, ""),
   );
   if (typeof choice === "string") return choice;
-  const raw = rawReply(plan.envelope, content.text, content.files, content.rich);
-  return await writeReply(client, { plan, threadId: id, raw, content, replace: "" }, choice);
+  const final = finalMail(content, plan.envelope.subject, choice);
+  if (typeof final === "string") return final;
+  const raw = replyRaw(plan.envelope, final);
+  return withEdit(
+    choice,
+    await writeReply(
+      client,
+      { plan, threadId: id, raw, content: final.content, replace: "" },
+      choice,
+    ),
+  );
 }
 
 /** The message to forward: the one asked for, else the thread's last sent one. */
@@ -415,13 +436,14 @@ async function forward(args: Args, { api, client, account }: Session): Promise<s
   if (typeof own === "string") return own;
   const files = await filesFor(args, own);
   if (typeof files === "string") return files;
-  const content: MailContent = { text: "", rich: undefined, images: [], files, html: "" };
+  const note = untrimmed(args, "note");
+  const content: MailContent = { text: note, rich: undefined, images: [], files, html: "" };
   const mail: Outgoing = {
     to,
     cc: text(args, "cc"),
     bcc: text(args, "bcc"),
     subject: forwardSubject(readMessage(message.payload).subject),
-    body: forwardBody(untrimmed(args, "note"), message),
+    body: forwardBody(note, message),
   };
   const choice = await askMail(
     api,
@@ -429,7 +451,8 @@ async function forward(args: Args, { api, client, account }: Session): Promise<s
       title: "Forward an email",
       summary: `Forward “${mail.subject}” to ${listForPeople(to)}`,
       details: mailDetails(newHeaders(mail), content, mail.body),
-      mail: cardMail({ account, ...mail, draft: false }, content, mail.body),
+      // The editable text is the note; the forwarded message follows it as it is.
+      mail: cardMail({ account, ...mail, draft: false }, content, note),
     },
     "send",
     {
@@ -438,7 +461,11 @@ async function forward(args: Args, { api, client, account }: Session): Promise<s
     },
   );
   if (typeof choice === "string") return choice;
-  return await writeNew(client, buildNew(mail, files), content, choice);
+  const final = finalMail(content, mail.subject, choice, true);
+  if (typeof final === "string") return final;
+  const body = forwardBody(final.content.text, message);
+  const raw = buildNew({ ...mail, subject: final.subject, body }, files);
+  return withEdit(choice, await writeNew(client, raw, content, choice));
 }
 
 function forwardTool(getApi: () => ExtensionApi | null): ExtensionTool {
