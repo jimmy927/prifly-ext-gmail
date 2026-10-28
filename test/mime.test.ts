@@ -171,10 +171,10 @@ test("a header value cannot start a new header", () => {
 });
 
 test("listForPeople writes names in plain Unicode, decoding encoded-words", () => {
-  const plain = "Pär Dahlund <par.dahlund@clwork.se>";
+  const plain = "Åsa Exempel <asa.exempel@example.com>";
   expect(listForPeople(plain)).toBe(plain);
-  expect(listForPeople("=?UTF-8?B?UMOkciBEYWhsdW5k?= <par.dahlund@clwork.se>")).toBe(plain);
+  expect(listForPeople("=?UTF-8?B?w4VzYSBFeGVtcGVs?= <asa.exempel@example.com>")).toBe(plain);
   expect(
-    listForPeople("=?ISO-8859-1?Q?P=E4r_Dahlund?= <par.dahlund@clwork.se>, b@example.com"),
+    listForPeople("=?ISO-8859-1?Q?=C5sa_Exempel?= <asa.exempel@example.com>, b@example.com"),
   ).toBe(`${plain}, b@example.com`);
 });

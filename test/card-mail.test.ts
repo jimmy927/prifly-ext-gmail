@@ -110,11 +110,11 @@ test("a forward's card mail lists the original's attachments", async () => {
 test("a new draft's summary shows the recipient's name in plain Unicode", async () => {
   const w = started();
   await w.call("gmail_new_draft", {
-    to: "Pär Dahlund <par.dahlund@clwork.se>",
+    to: "Åsa Exempel <asa.exempel@example.com>",
     subject: "Hej",
     body: "Hi",
   });
   const summary = w.confirms[0]?.spec.summary ?? "";
-  expect(summary).toContain("Pär Dahlund <par.dahlund@clwork.se>");
+  expect(summary).toContain("Åsa Exempel <asa.exempel@example.com>");
   expect(summary).not.toContain("=?");
 });
