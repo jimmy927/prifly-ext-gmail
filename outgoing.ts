@@ -250,10 +250,13 @@ export function cardMail(
   if (envelope.draft) mail.draft = true;
   if (content.rich !== undefined) {
     mail.html = content.rich.html;
+    // `name` (the [image:name] marker) is not in @prifly/extension-api v0.8.0's ConfirmMailImage yet;
+    // a newer prifly captions the picture with it and places it at its marker after an edit.
     mail.images = content.rich.images.map((each) => ({
       id: each.id,
       mimeType: each.mimeType,
       bytes: each.bytes,
+      name: each.name,
     }));
   }
   if (content.files.length > 0) {

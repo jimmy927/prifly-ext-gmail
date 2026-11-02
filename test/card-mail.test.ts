@@ -63,6 +63,9 @@ test("a reply's card mail carries its two images, its file and the HTML with cid
     expect(html).toContain(`cid:${image.id}`);
   }
   expect(html.indexOf(`cid:${shown[0]?.id}`)).toBeLessThan(html.indexOf(`cid:${shown[1]?.id}`));
+  // `name` is not in @prifly/extension-api v0.8.0's ConfirmMailImage yet, so read it untyped.
+  const names = shown.map((each) => (each as { name?: string }).name);
+  expect(names).toEqual(["one", "two"]);
   // `bytes` is not in @prifly/extension-api v0.8.0's ConfirmMailFile yet, so compare it untyped.
   const attached: unknown[] = mail?.attachments ?? [];
   expect(attached).toEqual([
