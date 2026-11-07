@@ -83,8 +83,8 @@ not an image. The mail then goes out as `multipart/alternative` (plain text
 and HTML) inside `multipart/related` with the pictures, inside
 `multipart/mixed` when there are `attachments` too. Without `html`, the HTML
 is made from `body`: blank lines split paragraphs, a single line break
-becomes `<br>`, `- ` / `* ` lines a list, `1. ` / `1) ` lines a numbered list,
-everything escaped. With `html` (which may hold the same markers), `body`
+becomes `<br>`, `- ` / `* ` lines a list, numbered lines (`1. `) stay text with
+their numbers as written, everything escaped. With `html` (which may hold the same markers), `body`
 stays the plain-text alternative. Each picture part carries a Content-ID and
 an equal `X-Attachment-Id`, which keeps Gmail's web editor from dropping it
 when you open the draft and send it from there. The confirm card lists the

@@ -140,10 +140,23 @@ test("textToHtml makes paragraphs, line breaks and escapes everything", () => {
 test("textToHtml turns list lines into lists, with no stray paragraph", () => {
   expect(textToHtml("- one\n* two", [])).toBe("<ul><li>one</li><li>two</li></ul>");
   expect(textToHtml("Steps:\n- one\n- two\n\nThen:\n1. first\n2) second", [])).toBe(
-    "<p>Steps:</p>\n<ul><li>one</li><li>two</li></ul>\n<p>Then:</p>\n<ol><li>first</li><li>second</li></ol>",
+    "<p>Steps:</p>\n<ul><li>one</li><li>two</li></ul>\n<p>Then:<br>1. first<br>2) second</p>",
   );
-  expect(textToHtml("1. a\n- b", [])).toBe("<ol><li>a</li></ol>\n<ul><li>b</li></ul>");
+  expect(textToHtml("1. a\n- b", [])).toBe("<p>1. a</p>\n<ul><li>b</li></ul>");
   expect(textToHtml("**bold** stays text", [])).toBe("<p>**bold** stays text</p>");
+});
+
+test("textToHtml keeps the numbers as written, with a picture between them", () => {
+  const html = textToHtml("1. a\n[image:x]\n2. b", [image("x", "ii_abc")]);
+  expect(html).toContain("2. b");
+  expect(html).not.toContain("<ol");
+});
+
+test("textToHtml keeps consecutive numbered lines as text, not an ordered list", () => {
+  const html = textToHtml("1. a\n2. b", []);
+  expect(html).toContain("1. a");
+  expect(html).toContain("2. b");
+  expect(html).not.toContain("<ol");
 });
 
 test("textToHtml puts a picture at its marker line, in a paragraph of its own", () => {
