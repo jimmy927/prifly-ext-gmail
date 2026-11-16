@@ -15,7 +15,6 @@ export type RichMail = { text: string; html: string; images: InlineImage[] };
 const MARKER_LINE = /^\s*\[image:\s*([^\]\r\n]+?)\s*\]\s*$/;
 const MARKER_ANY = /\[image:\s*([^\]\r\n]+?)\s*\]/g;
 const BULLET = /^\s*[-*]\s+(.*)$/;
-const NUMBER = /^\s*\d+[.)]\s+(.*)$/;
 
 export function escapeHtml(text: string): string {
   return text
@@ -34,7 +33,7 @@ function newImageId(): string {
 const imageTag = (image: InlineImage): string =>
   `<img src="cid:${image.id}" alt="${escapeHtml(image.name)}" style="max-width:100%">`;
 
-type Run = { kind: "p" | "ul" | "ol"; items: string[] };
+type Run = { kind: "p" | "ul"; items: string[] };
 
 function runHtml(run: Run): string {
   const items = run.items.map(escapeHtml);
@@ -42,19 +41,19 @@ function runHtml(run: Run): string {
   return `<${run.kind}>${items.map((each) => `<li>${each}</li>`).join("")}</${run.kind}>`;
 }
 
-/** A non-blank line as a list item (without its bullet or number) or paragraph text. */
+/** A non-blank line as a bullet item (without its bullet) or paragraph text; a number stays as written. */
 function classify(line: string): { kind: Run["kind"]; text: string } {
   const bullet = BULLET.exec(line);
   if (bullet !== null) return { kind: "ul", text: bullet[1] ?? "" };
-  const number = NUMBER.exec(line);
-  if (number !== null) return { kind: "ol", text: number[1] ?? "" };
   return { kind: "p", text: line.trim() };
 }
 
 /**
  * A plain body as HTML: blank lines split paragraphs, a single line break
- * inside one becomes `<br>`, `- ` / `* ` lines a `<ul>`, `1. ` / `1) ` lines
- * an `<ol>`, and a marker line the picture in a paragraph of its own.
+ * inside one becomes `<br>`, `- ` / `* ` lines a `<ul>`, and a marker line the
+ * picture in a paragraph of its own. Numbered lines ("2. text") are ordinary
+ * text, number as written, so the numbers survive blank lines and pictures
+ * between them and the HTML reads like the plain text.
  */
 export function textToHtml(body: string, images: InlineImage[]): string {
   const byName = new Map(images.map((each) => [each.name, each]));
