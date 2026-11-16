@@ -121,3 +121,19 @@ test("a new draft's summary shows the recipient's name in plain Unicode", async 
   expect(summary).toContain("Åsa Exempel <asa.exempel@example.com>");
   expect(summary).not.toContain("=?");
 });
+
+test("the card's recipients and details show names in plain Unicode, not encoded-words", async () => {
+  const w = started();
+  await w.call("gmail_send", {
+    to: "Åsa Exempel <asa.exempel@example.com>",
+    cc: "Örjan Prov <orjan.prov@example.com>, b@example.com",
+    subject: "Hej",
+    body: "Hi",
+  });
+  const mail = shownMail(w);
+  expect(mail?.to).toBe("Åsa Exempel <asa.exempel@example.com>");
+  expect(mail?.cc).toBe("Örjan Prov <orjan.prov@example.com>, b@example.com");
+  const details = w.confirms[0]?.spec.details ?? "";
+  expect(details).toContain("To: Åsa Exempel <asa.exempel@example.com>");
+  expect(details).not.toContain("=?");
+});

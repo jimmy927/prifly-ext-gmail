@@ -10,7 +10,13 @@ import { basename, extname, isAbsolute } from "node:path";
 import type { ConfirmMail } from "@prifly/extension-api";
 import { failureText, type GmailClient } from "./gmail";
 import { type ImageFile, type RichMail, richBody } from "./mail-html";
-import { type FileAttachment, type InlineImage, type RichContent, savedCopyProblems } from "./mime";
+import {
+  type FileAttachment,
+  type InlineImage,
+  listForPeople,
+  type RichContent,
+  savedCopyProblems,
+} from "./mime";
 import { type Args, strings, untrimmed } from "./tool-kit";
 
 /** Gmail's own limit for what a mail carries. */
@@ -190,6 +196,9 @@ export function extrasText(content: Pick<MailContent, "images" | "files">): stri
   return parts.length === 0 ? "" : ` with ${parts.join(" and ")}`;
 }
 
+/** Headers whose names people read: shown decoded, not as RFC 2047 encoded-words. */
+const ADDRESS_HEADERS = new Set(["To", "Cc", "Bcc"]);
+
 /** What a confirm card shows of a mail: its headers, its pictures and files, then its text as written. */
 export function mailDetails(
   headers: [string, string][],
@@ -198,7 +207,7 @@ export function mailDetails(
 ): string {
   const lines = headers
     .filter(([, value]) => value !== "")
-    .map(([name, value]) => `${name}: ${value}`);
+    .map(([name, value]) => `${name}: ${ADDRESS_HEADERS.has(name) ? listForPeople(value) : value}`);
   if (content.images.length > 0) {
     lines.push(
       "Inline images:",
@@ -241,12 +250,13 @@ export function cardMail(
 ): ConfirmMail {
   const mail: ConfirmMail = {
     from: envelope.account,
-    to: envelope.to,
+    // The card is read by people: names in plain Unicode, not the header's encoded-words.
+    to: listForPeople(envelope.to),
     subject: envelope.subject,
     text,
   };
-  if (envelope.cc !== "") mail.cc = envelope.cc;
-  if (envelope.bcc !== "") mail.bcc = envelope.bcc;
+  if (envelope.cc !== "") mail.cc = listForPeople(envelope.cc);
+  if (envelope.bcc !== "") mail.bcc = listForPeople(envelope.bcc);
   if (envelope.draft) mail.draft = true;
   if (content.rich !== undefined) {
     mail.html = content.rich.html;
