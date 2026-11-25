@@ -7,6 +7,10 @@ card with exactly what will happen (the recipients, subject, text and files of
 a mail, or the threads and the change), and only happens when you confirm.
 Cancel, and the tool answers "Not done: you cancelled" and nothing is written.
 
+![The Gmail confirm card in prifly: a draft reply to Ada Lovelace with the recipients, subject and text, and the buttons Save as draft, Send now and Cancel](docs/screenshot.png)
+
+*The confirm card a mail shows before anything is sent. The people and text are invented.*
+
 There is no UI besides that: no launcher, no chips. Settings → Extensions
 shows one status line, read at start and every 15 minutes: "Connected as
 ada@example.com · 3 unread · 12 labels" (unread inbox threads, your own
