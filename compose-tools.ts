@@ -26,6 +26,7 @@ import {
 } from "./mime";
 import {
   ATTACHMENTS_PROPERTY,
+  BODY_PROPERTY,
   brokenCopy,
   cardMail,
   extrasText,
@@ -157,7 +158,7 @@ function draftReplyTool(getApi: () => ExtensionApi | null): ExtensionTool {
     inputSchema: schema(
       {
         thread_id: { type: "string" },
-        body: { type: "string", description: "The reply's plain text." },
+        body: BODY_PROPERTY,
         html: HTML_PROPERTY,
         inline_images: INLINE_IMAGES_PROPERTY,
         attachments: ATTACHMENTS_PROPERTY,
@@ -236,7 +237,7 @@ function newDraftTool(getApi: () => ExtensionApi | null): ExtensionTool {
         to: { type: "string", description: "Addresses, separated by commas." },
         cc: { type: "string" },
         subject: { type: "string" },
-        body: { type: "string", description: "Plain text." },
+        body: BODY_PROPERTY,
         html: HTML_PROPERTY,
         inline_images: INLINE_IMAGES_PROPERTY,
         attachments: ATTACHMENTS_PROPERTY,
@@ -292,7 +293,7 @@ function sendTool(getApi: () => ExtensionApi | null): ExtensionTool {
         cc: { type: "string" },
         bcc: { type: "string" },
         subject: { type: "string" },
-        body: { type: "string", description: "Plain text." },
+        body: BODY_PROPERTY,
         html: HTML_PROPERTY,
         inline_images: INLINE_IMAGES_PROPERTY,
         attachments: ATTACHMENTS_PROPERTY,
@@ -354,7 +355,7 @@ function replyTool(getApi: () => ExtensionApi | null): ExtensionTool {
     inputSchema: schema(
       {
         thread_id: { type: "string" },
-        body: { type: "string", description: "The reply's plain text." },
+        body: BODY_PROPERTY,
         html: HTML_PROPERTY,
         inline_images: INLINE_IMAGES_PROPERTY,
         all: { type: "boolean", description: "Reply to everyone (default true)." },

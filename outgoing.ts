@@ -65,10 +65,16 @@ export const INLINE_IMAGES_PROPERTY = {
     "Pictures that show inside the mail, each at a line of its own in `body` reading [image:name].",
 };
 
+/** A mail tool's `body`: plain text, never Markdown. */
+export const BODY_PROPERTY = {
+  type: "string",
+  description: "Plain text, not Markdown: a table or other formatting goes in `html`.",
+};
+
 export const HTML_PROPERTY = {
   type: "string",
   description:
-    "Optional HTML body, which may hold [image:name] markers. Then `body` stays the plain-text alternative. Left out with inline_images: made from `body`.",
+    "Optional HTML body, which may hold [image:name] markers; then `body` stays the plain-text alternative. Required for any formatting such as a table, bold or links: a mail is plain text or HTML, never Markdown, and a Markdown table in `body` is refused. Left out with inline_images: `body` becomes HTML as paragraphs, line breaks and `- ` bullets only.",
 };
 
 export function size(bytes: number): string {

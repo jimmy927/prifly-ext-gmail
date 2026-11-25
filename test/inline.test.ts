@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parsePart } from "../gmail-types";
-import { richBody, textToHtml } from "../mail-html";
+import { hasMarkdownTable, MARKDOWN_TABLE_REFUSAL, richBody, textToHtml } from "../mail-html";
 import {
   buildNew,
   decodeBase64url,
@@ -185,6 +185,17 @@ test("richBody with an html argument keeps it and replaces its markers", () => {
   if (rich === null || typeof rich === "string") throw new Error(`Not rich: ${rich}`);
   expect(rich.html).toMatch(/^<div>Look <img src="cid:ii_[0-9a-f]{12}" alt="a"[^>]*> here<\/div>$/);
   expect(rich.text).toBe("plain");
+});
+
+test("a Markdown table in body is refused without html, with or without pictures, and passes with html", () => {
+  const table = "Status:\n\n| # | Ändring | Status |\n|---|:---:|---|\n| 1 | Logga | Klar |";
+  expect(richBody(table, "", [])).toBe(MARKDOWN_TABLE_REFUSAL);
+  expect(richBody(`${table}\n[image:a]`, "", files("a"))).toBe(MARKDOWN_TABLE_REFUSAL);
+  const rich = richBody(table, "<table><tr><td>1</td></tr></table>", []);
+  expect(typeof rich === "object" && rich?.html).toContain("<table>");
+  expect(hasMarkdownTable("a | b\n--- | ---")).toBe(true);
+  expect(hasMarkdownTable("Hej\n---\nmvh")).toBe(false);
+  expect(hasMarkdownTable("price | 10 kr")).toBe(false);
 });
 
 test("richBody is null for a plain mail, and refuses markers and images that do not match", () => {

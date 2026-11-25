@@ -82,6 +82,17 @@ export function textToHtml(body: string, images: InlineImage[]): string {
   return out.join("\n");
 }
 
+/** A Markdown table's delimiter row: `|---|:--:|`, `--- | ---`. */
+const TABLE_DELIMITER = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/;
+
+/** Whether a plain body holds a Markdown pipe table, which no mail reader draws. */
+export function hasMarkdownTable(body: string): boolean {
+  return body.split(/\r?\n/).some((line) => TABLE_DELIMITER.test(line));
+}
+
+export const MARKDOWN_TABLE_REFUSAL =
+  "Not done: `body` holds a Markdown table, which the recipient would see as raw pipes. A mail is plain text or HTML, never Markdown: pass the table as an HTML <table> in `html` (with [image:name] markers there if there are pictures), and keep `body` as the plain-text version.";
+
 /** The names in the markers on a line of their own (`lines`) or anywhere in the text. */
 function markerNames(text: string, onOwnLine: boolean): string[] {
   if (onOwnLine) {
@@ -122,6 +133,7 @@ function markerProblem(
  */
 export function richBody(body: string, html: string, files: ImageFile[]): RichMail | string | null {
   const htmlGiven = html.trim() !== "";
+  if (!htmlGiven && hasMarkdownTable(body)) return MARKDOWN_TABLE_REFUSAL;
   const bodyMarkers = markerNames(body, true);
   if (files.length === 0 && !htmlGiven && bodyMarkers.length === 0) return null;
   const names = files.map((each) => each.name);
